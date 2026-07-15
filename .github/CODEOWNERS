@@ -1,0 +1,3 @@
+# Auto-requests a review from the maintainer on every PR (notification only;
+# code-owner review is not required to merge, so this never blocks a listing).
+* @ngsevers

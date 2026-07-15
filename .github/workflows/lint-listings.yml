@@ -1,0 +1,21 @@
+name: Lint listings
+
+# Advisory check on PRs that touch the directory: validates the listing table
+# format so contributors get instant feedback. Read-only; it never runs a
+# listed module's code. Not configured as a required check, so it never blocks
+# a merge on its own - a maintainer reviews.
+on:
+  pull_request:
+    paths:
+      - README.md
+      - scripts/lint_listings.py
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 scripts/lint_listings.py
