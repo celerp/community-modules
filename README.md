@@ -23,7 +23,7 @@ property, and a deliberate one.
 1. Open the module's own repository (linked in the list below) and download it.
 2. Copy the module folder into your Celerp data directory's `modules/` folder:
    - **macOS**: `~/Library/Application Support/Celerp/celerp-data/modules/`
-   - **Linux**: `~/.config/celerp/celerp-data/modules/`
+   - **Linux**: `~/.config/Celerp/celerp-data/modules/`
    - **Windows**: `%APPDATA%\Celerp\celerp-data\modules\`
 3. In Celerp, open **Settings → Modules**, enable it, and restart.
 
