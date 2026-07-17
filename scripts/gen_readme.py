@@ -20,12 +20,17 @@ def render(index: dict) -> str:
         "| Module | Tier | What it does | Source | Author | License |",
         "|---|---|---|---|---|---|",
     ]
+    def cell(v) -> str:
+        # Escape pipes and flatten any newline so one field cannot split the
+        # markdown row (schema allows newlines in description).
+        return " ".join(str(v).replace("|", "\\|").split())
+
     for m in index["modules"]:
         url = m.get("repo") or m.get("homepage") or ""
         link = f"[{url.split('//', 1)[-1].removeprefix('github.com/').removeprefix('www.')}]({url})" if url else ""
         cells = (m["name"], TIER_LABEL[m["tier"]], m["description"], link,
                  m["author"], m["license"])
-        lines.append("| " + " | ".join(str(c).replace("|", "\\|") for c in cells) + " |")
+        lines.append("| " + " | ".join(cell(c) for c in cells) + " |")
     return "\n".join(lines)
 
 
