@@ -46,12 +46,6 @@ exactly as described above.
 <!-- modules:begin -->
 | Module | Tier | What it does | Source | Author | License |
 |---|---|---|---|---|---|
-| Budgeting | Official | Budget entry per GL account, actual vs budget variance analysis, and period forecasting. | [celerp.com/marketplace/celerp-budgeting](https://celerp.com/marketplace/celerp-budgeting) | Celerp | Proprietary |
-| HR & Payroll | Official | Employee records, payroll processing, leave management, and tax withholding. | [celerp.com/marketplace/celerp-hr](https://celerp.com/marketplace/celerp-hr) | Celerp | Proprietary |
-| Multi-Currency | Official | Multi-currency transactions, exchange rate management, and foreign currency revaluation. | [celerp.com/marketplace/celerp-multicurrency](https://celerp.com/marketplace/celerp-multicurrency) | Celerp | Proprietary |
-| Point of Sale | Official | Fullscreen POS terminal with scan-to-cart, receipt printing, and cash management. | [celerp.com/marketplace/celerp-pos](https://celerp.com/marketplace/celerp-pos) | Celerp | BSL-1.1 |
-| Sales Funnel | Official | Deals pipeline and Kanban board for tracking sales opportunities from lead to close. | [celerp.com/marketplace/celerp-sales-funnel](https://celerp.com/marketplace/celerp-sales-funnel) | Celerp | BSL-1.1 |
-| Warehousing | Official | Advanced warehouse operations: pick instructions, stock receipts, reservations, and transfer workflows. | [celerp.com/marketplace/celerp-warehousing](https://celerp.com/marketplace/celerp-warehousing) | Celerp | BSL-1.1 |
 | Equipment Maintenance | Community | Track company equipment and what's due for service. | [celerp/celerp-module-template](https://github.com/celerp/celerp-module-template) | Celerp | MIT |
 <!-- modules:end -->
 
