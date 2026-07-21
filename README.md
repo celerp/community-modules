@@ -66,6 +66,7 @@ table sort the same way:
   "name": "Acme Widgets",
   "description": "One sentence on what it does.",
   "tier": "community",
+  "version": "0.1.0",
   "repo": "https://github.com/acme/acme-widgets",
   "author": "Acme",
   "license": "MIT",
@@ -87,6 +88,8 @@ Before it's merged, a listing must:
   shows both on your listing labelled as your own declaration;
 - **not** use the `celerp-` name prefix - that namespace is reserved for
   official modules, so users can tell first-party from community at a glance;
+- carry a **version** that matches the `version` in the module's
+  `PLUGIN_MANIFEST`, so the listed version and the installed one stay in step;
 - use `"tier": "community"`. The `verified` and `official` tiers are set by the
   maintainer of this directory, not chosen by a contributor;
 - pass `python lint.py <module-folder>` from the template (manifest is valid,
