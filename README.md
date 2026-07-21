@@ -29,17 +29,30 @@ property, and a deliberate one.
 
 ## The modules
 
-<!-- Add your module by opening a PR that adds one row. Keep the list alphabetical. -->
+The machine-readable catalog is [`index.json`](index.json); Celerp's in-app
+Marketplace tab and the table below are both generated from it. **Official**
+modules are built and sold by Celerp. **Community** modules are third-party,
+exactly as described above.
 
-| Module | What it does | Repository | Author | License |
-|---|---|---|---|---|
-| Equipment Maintenance | Track company equipment and what's due for service | [celerp-module-template](https://github.com/celerp/celerp-module-template) | Celerp | MIT |
+<!-- The table below is generated from index.json by scripts/gen_readme.py. Edit index.json, not the table. -->
+<!-- modules:begin -->
+| Module | Tier | What it does | Source | Author | License |
+|---|---|---|---|---|---|
+| Budgeting | Official | Budget entry per GL account, actual vs budget variance analysis, and period forecasting. | [celerp.com/marketplace/celerp-budgeting](https://celerp.com/marketplace/celerp-budgeting) | Celerp | Proprietary |
+| HR & Payroll | Official | Employee records, payroll processing, leave management, and tax withholding. | [celerp.com/marketplace/celerp-hr](https://celerp.com/marketplace/celerp-hr) | Celerp | Proprietary |
+| Multi-Currency | Official | Multi-currency transactions, exchange rate management, and foreign currency revaluation. | [celerp.com/marketplace/celerp-multicurrency](https://celerp.com/marketplace/celerp-multicurrency) | Celerp | Proprietary |
+| Point of Sale | Official | Fullscreen POS terminal with scan-to-cart, receipt printing, and cash management. | [celerp.com/marketplace/celerp-pos](https://celerp.com/marketplace/celerp-pos) | Celerp | BSL-1.1 |
+| Sales Funnel | Official | Deals pipeline and Kanban board for tracking sales opportunities from lead to close. | [celerp.com/marketplace/celerp-sales-funnel](https://celerp.com/marketplace/celerp-sales-funnel) | Celerp | BSL-1.1 |
+| Warehousing | Official | Advanced warehouse operations: pick instructions, stock receipts, reservations, and transfer workflows. | [celerp.com/marketplace/celerp-warehousing](https://celerp.com/marketplace/celerp-warehousing) | Celerp | BSL-1.1 |
+| Equipment Maintenance | Community | Track company equipment and what's due for service. | [celerp/celerp-module-template](https://github.com/celerp/celerp-module-template) | Celerp | MIT |
+<!-- modules:end -->
 
 ## List your module
 
 Build against the [module template](https://github.com/celerp/celerp-module-template),
 publish it in **your own** public repository, then open a PR here that adds one
-row to the table above. Before it's merged, a listing must:
+entry to [`index.json`](index.json) (the README table regenerates from it).
+Before it's merged, a listing must:
 
 - link to a repository whose **source is readable**, so users can review what
   they install (this is the whole trust model);
@@ -47,8 +60,8 @@ row to the table above. Before it's merged, a listing must:
   source-available "free to use, no resale" license is equally fine - keep your
   commercial rights if you plan to sell a version later. Just make it clear what
   users may do;
-- have a README stating **what data the module touches** and disclosing **any
-  network calls**;
+- declare in its index entry **what data the module touches** (`data_access`)
+  and **any network calls** (`network_calls`), and state the same in its README;
 - **not** use the `celerp-` name prefix - that namespace is reserved for
   official modules, so users can tell first-party from community at a glance;
 - pass `python lint.py <module-folder>` from the template (manifest is valid,

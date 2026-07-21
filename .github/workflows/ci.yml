@@ -1,0 +1,21 @@
+name: Validate catalog
+
+# Validates index.json (schema + policy rules) and checks the README table is
+# generated from it. Read-only; it never runs a listed module's code.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: pip install --quiet "jsonschema>=4"
+      - run: python3 scripts/validate_index.py --selftest
+      - run: python3 scripts/validate_index.py
+      - run: python3 scripts/gen_readme.py --check
