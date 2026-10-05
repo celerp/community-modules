@@ -7,9 +7,10 @@ Policy rules on top of the schema:
   - ids are unique and the list is sorted by (tier rank, id)
   - the "celerp-" id prefix is reserved for the official tier
   - community and verified tiers require a public repo
+  - community and verified tiers require data_access and network_calls
+  - community tier carries no version (the module's own manifest is the version)
   - verified tier requires verified_commit and sha256
   - a price requires the verified or official tier (we do not sell unverified code)
-  - verified tier requires data_access and network_calls (cross-checked disclosures)
 
 Run `validate_index.py --selftest` to exercise every rule against inline fixtures.
 """
@@ -43,10 +44,14 @@ def check(index: dict, schema: dict) -> list[str]:
         seen.add(mid)
         if mid.startswith("celerp-") and tier != "official":
             problems.append(f"{mid}: the 'celerp-' prefix is reserved for official modules")
-        if tier in ("community", "verified") and not m.get("repo"):
-            problems.append(f"{mid}: {tier} tier requires a public repo")
+        if tier in ("community", "verified"):
+            for field in ("repo", "data_access", "network_calls"):
+                if not m.get(field):
+                    problems.append(f"{mid}: {tier} tier requires {field}")
+        if tier == "community" and "version" in m:
+            problems.append(f"{mid}: leave out version; a community module's version is the one in its own manifest")
         if tier == "verified":
-            for field in ("verified_commit", "sha256", "data_access", "network_calls"):
+            for field in ("verified_commit", "sha256"):
                 if not m.get(field):
                     problems.append(f"{mid}: verified tier requires {field}")
         if (m.get("price_monthly") or m.get("price_once")) and tier == "community":
@@ -65,7 +70,8 @@ def selftest() -> int:
         "modules": [
             {"id": "my-module", "name": "My Module", "description": "Does things.",
              "tier": "community", "repo": "https://github.com/a/b",
-             "author": "A", "license": "MIT"},
+             "author": "A", "license": "MIT",
+             "data_access": "Its own records.", "network_calls": "None."},
         ],
     }
     assert check(base, schema) == [], "valid fixture must pass"
@@ -80,6 +86,9 @@ def selftest() -> int:
         "duplicate id": broken(lambda ms: ms.append(dict(ms[0]))),
         "reserved prefix": broken(lambda ms: ms[0].update(id="celerp-sneaky")),
         "community without repo": broken(lambda ms: ms[0].pop("repo")),
+        "community without data_access": broken(lambda ms: ms[0].pop("data_access")),
+        "community without network_calls": broken(lambda ms: ms[0].pop("network_calls")),
+        "community with version": broken(lambda ms: ms[0].update(version="1.0.0")),
         "paid community": broken(lambda ms: ms[0].update(price_monthly=9)),
         "verified without pin": broken(lambda ms: ms[0].update(tier="verified")),
         "bad id chars": broken(lambda ms: ms[0].update(id="My Module!")),
@@ -87,7 +96,8 @@ def selftest() -> int:
         "unsorted": broken(lambda ms: ms.insert(0, {
             "id": "zz-later", "name": "Z", "description": "Z.",
             "tier": "community", "repo": "https://github.com/a/z",
-            "author": "A", "license": "MIT"})),
+            "author": "A", "license": "MIT",
+            "data_access": "Its own records.", "network_calls": "None."})),
     }
     failures = [label for label, doc in cases.items() if not check(doc, schema)]
     if failures:
