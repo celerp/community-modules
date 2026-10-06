@@ -20,7 +20,6 @@ UNFOLLOWED_OR_SECRET = {"dynamic_code", "secrets"}
 UNFOLLOWED_OR_NETWORK = {"dynamic_code", "network"}
 FILES = {"files"}
 
-OWN = "import httpx\nfrom ui.config import API_BASE\nc = httpx.AsyncClient(base_url=API_BASE)\n"
 
 
 class Introspection(FlaggedCase):
@@ -177,7 +176,6 @@ class AttributeStores(FlaggedCase):
             "delattr": "import ui.config as cfg\ndelattr(cfg, 'API_BASE')\n",
         }, UNFOLLOWED)
         self.assertFlagged({
-            "own client base_url": OWN + "c.base_url = '/x'\n",
         }, UNFOLLOWED_OR_NETWORK)
 
     def test_ordinary_stores_stay_clean(self):

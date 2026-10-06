@@ -91,13 +91,6 @@ class Passes(Case):
                         association="NONE", gh=self.gh, lint=no_lint)
         self.assertEqual(result.status, "pass", result)
 
-    def test_declared_network_calls_pass(self):
-        self.gh.downloads[archive_url()] = module_zip(module_files(extra={
-            "acme-widgets/acme_widgets/sync.py": "import requests\n"}))
-        self.with_entry(OFFICIAL, dict(NEW, network_calls="Sends orders to api.acme.example."),
-                        EXISTING)
-        self.assertEqual(self.run_review().status, "pass")
-
     def test_owner_login_is_case_insensitive(self):
         self.author = "ACME"
         self.assertEqual(self.run_review().status, "pass")
@@ -335,6 +328,17 @@ class Flags(Case):
         self.assertEqual((result.status, result.problems), ("flag", []))
         self.assertTrue(any("acme_widgets/sync.py" in f and "network_calls" in f
                             for f in result.flags), result.flags)
+
+    def test_declared_network_call_is_still_flagged(self):
+        # network_calls is the author's disclosure; it never lets a network call pass.
+        self.gh.downloads[archive_url()] = module_zip(module_files(extra={
+            "acme-widgets/acme_widgets/sync.py": "import requests\n"}))
+        self.with_entry(OFFICIAL, dict(NEW, network_calls="Sends orders to api.acme.example."),
+                        EXISTING)
+        result = self.run_review()
+        self.assertEqual((result.status, result.problems), ("flag", []))
+        self.assertTrue(any("acme_widgets/sync.py" in f for f in result.flags), result.flags)
+        self.assertFalse(any("network_calls" in f for f in result.flags), result.flags)
 
     def test_process_spawn_is_flagged_even_with_network_declared(self):
         self.gh.downloads[archive_url()] = module_zip(module_files(extra={

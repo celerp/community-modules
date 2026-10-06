@@ -22,14 +22,20 @@ class CleanCode(unittest.TestCase):
             "import re, uuid\nfrom urllib.parse import quote\n"
             "def f(x):\n    return quote(re.sub('a', 'b', x))\n")), set())
 
-    def test_own_api_client_is_not_a_network_call(self):
+    def test_celerp_module_api_is_not_a_network_call(self):
+        self.assertEqual(kinds(py(
+            "from celerp.modules.api import api_request\n"
+            "async def call(method, url):\n"
+            "    return await api_request(method, url)\n")), set())
+
+    def test_httpx_client_to_celerp_api_goes_to_review(self):
         self.assertEqual(kinds(py(
             "import httpx\nfrom ui.config import API_BASE\n"
             "def c():\n    return httpx.AsyncClient(base_url=API_BASE, timeout=5)\n"
             "async def call(method, url):\n"
             "    try:\n        async with c() as client:\n"
             "            return await getattr(client, method)(url)\n"
-            "    except httpx.HTTPError:\n        return None\n")), set())
+            "    except httpx.HTTPError:\n        return None\n")), {"network", "dynamic_code"})
 
     def test_file_under_celerp_data_dir_is_allowed(self):
         self.assertEqual(kinds(py(
@@ -166,10 +172,8 @@ class Indirection(unittest.TestCase):
 
     def test_computed_attribute_names(self):
         for src in ("def f(obj, name):\n    return getattr(obj, name)\n",
-                    "import httpx\nfrom ui.config import API_BASE\n"
                     "async def call(c, method, url):\n    return await getattr(c, method)(url)\n",
-                    "import httpx\nfrom ui.config import API_BASE\n"
-                    "def c():\n    return httpx.AsyncClient(base_url=API_BASE)\n"
+                    "def c():\n    return object()\n"
                     "def call(name):\n    return getattr(c(), name)\n"
                     "c = 1\n",
                     "import operator\nf = operator.methodcaller(name)\n",

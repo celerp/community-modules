@@ -1,5 +1,5 @@
-"""Code the scan cannot follow is flagged, ordinary code is not, and only Celerp's
-own API client is exempt from the network rule.
+"""Code the scan cannot follow is flagged, ordinary code is not, and every network
+client goes to review, Celerp's own API reached through httpx included.
 
 Every fixture is read as text and never run. The calls they hide are harmless
 ones the scan reports when written plainly (os.getenv reads the environment).
@@ -287,16 +287,22 @@ TEMPLATE = os.environ.get("TEMPLATE", "")
 TEMPLATE_COMMIT = "f863c419441a527e291503d50c53cbd126d13454"  # the catalog's template entry
 
 
-class TemplateScansClean(unittest.TestCase):
+class TemplateGoesToReview(unittest.TestCase):
     @unittest.skipUnless(TEMPLATE, "set TEMPLATE to a celerp-module-template checkout")
-    def test_template_module_has_no_findings(self):
+    def test_template_findings_are_its_raw_api_client(self):
+        # This template commit reaches Celerp's API with httpx directly, so its UI
+        # routes go to review; nothing else in it is a finding.
         def git(*args):
             return subprocess.run(["git", "-C", TEMPLATE, *args], check=True,
                                   capture_output=True).stdout
         folder = "acme-maintenance/"
         names = git("ls-tree", "-r", "--name-only", TEMPLATE_COMMIT, folder).decode().split()
         files = {n[len(folder):]: git("show", f"{TEMPLATE_COMMIT}:{n}") for n in names}
-        self.assertEqual(scan_folder(files), [])
+        found = scan_folder(files)
+        self.assertIn("network", {f.kind for f in found})
+        self.assertEqual({(f.path, f.kind) for f in found} - {
+            ("acme_maintenance/ui_routes.py", "network"),
+            ("acme_maintenance/ui_routes.py", "dynamic_code")}, set())
 
 
 H = "import httpx\nfrom ui.config import API_BASE\n"
@@ -304,43 +310,37 @@ OWN = H + "def _api():\n    return httpx.AsyncClient(base_url=API_BASE, timeout=
 ELSEWHERE = "'http:' + '//example.com'"  # a host other than Celerp's, not one literal
 
 
-class OwnApiClient(FlaggedCase):
-    def test_shapes_treated_as_celerp_own_api(self):
+class NetworkClients(FlaggedCase):
+    def test_celerp_module_api_is_not_a_finding(self):
         self.assertClean({
-            "template shape": OWN + "async def call(m, u):\n    async with _api() as c:\n"
-                                    "        return await getattr(c, m)(u)\n",
-            "client in with": H + "async def call(m, u):\n"
-                                  "    async with httpx.AsyncClient(base_url=API_BASE) as c:\n"
-                                  "        return await getattr(c, m)(u)\n",
-            "client assigned": H + "async def call(m, u):\n"
-                                   "    c = httpx.AsyncClient(base_url=API_BASE)\n"
-                                   "    return await getattr(c, m)(u)\n",
-            "from httpx import": "from httpx import AsyncClient\nfrom ui.config import API_BASE\n"
-                                 "c = AsyncClient(base_url=API_BASE)\n",
-            "ui.config module": "import httpx\nimport ui.config as cfg\n"
-                                "c = httpx.AsyncClient(base_url=cfg.API_BASE)\n",
-            "wrapped _api": OWN + "def wrap():\n    return _api()\nasync def call(m, u):\n"
-                                  "    async with wrap() as c:\n"
-                                  "        return await getattr(c, m)(u)\n",
+            "api_request": "from celerp.modules.api import api_request\n"
+                           "async def f():\n    return await api_request('GET', '/items')\n",
+            "module imported": "import celerp.modules.api as api\n"
+                               "async def f(q):\n    return await api.ai_query(q)\n",
+            "read_resource": "from celerp.modules.api import read_resource\n"
+                             "def f():\n    return read_resource('items')\n",
         })
 
-    def test_shapes_not_treated_as_own_api(self):
+    def test_every_httpx_client_goes_to_review(self):
         self.assertFlagged({
+            "template shape": OWN + "async def call(m, u):\n    async with _api() as c:\n"
+                                    "        return await getattr(c, m)(u)\n",
+            "ui.config module": "import httpx\nimport ui.config as cfg\n"
+                                "c = httpx.AsyncClient(base_url=cfg.API_BASE)\n",
             "client passed in": "async def call(c, m, u):\n    return await getattr(c, m)(u)\n",
             "no base_url": "import httpx\nc = httpx.AsyncClient()\n",
-            "literal base_url": "import httpx\nc = httpx.AsyncClient(base_url='http://localhost:8000')\n",
-            "API_BASE rebound in the file": H + f"API_BASE = {ELSEWHERE}\n"
-                                                "c = httpx.AsyncClient(base_url=API_BASE)\n",
-            "API_BASE as a parameter": H + "def f(API_BASE):\n"
-                                           "    return httpx.AsyncClient(base_url=API_BASE)\n",
-            "one of two returns elsewhere": H + "def _api(x):\n    if x:\n"
-                                                "        return httpx.AsyncClient(base_url=API_BASE)\n"
-                                                f"    return httpx.AsyncClient(base_url={ELSEWHERE})\n",
-            "_api rebound": OWN + "def other():\n    return httpx.AsyncClient(base_url=B)\n"
-                                  "_api = other\n",
         }, UNFOLLOWED_OR_NETWORK)
+        for name, src in {"from httpx import": "from httpx import AsyncClient\n"
+                                               "from ui.config import API_BASE\n"
+                                               "c = AsyncClient(base_url=API_BASE)\n",
+                          "client in with": H + "async def call(u):\n"
+                                                "    async with httpx.AsyncClient("
+                                                "base_url=API_BASE) as c:\n"
+                                                "        return await c.get(u)\n"}.items():
+            with self.subTest(name):
+                self.assertEqual(kinds(src), {"network"})
 
-    def test_a_non_celerp_base_url_is_not_own_api(self):
+    def test_changed_settings_and_modules_go_to_review(self):
         self.assertFlagged({
             "ui.config.API_BASE rewritten": "import httpx\nimport ui.config as cfg\n"
                                             f"cfg.API_BASE = {ELSEWHERE}\n"
@@ -350,9 +350,6 @@ class OwnApiClient(FlaggedCase):
             "API_BASE rewritten via setattr": "import ui.config as cfg\n"
                                               f"setattr(cfg, 'API_BASE', {ELSEWHERE})\n",
             "a standard module changed": "import sys\nsys.stdout = None\n",
-            "client base_url replaced": OWN + "async def f():\n    async with _api() as c:\n"
-                                              f"        c.base_url = {ELSEWHERE}\n"
-                                              "        return await c.get('/')\n",
         }, UNFOLLOWED_OR_NETWORK)
 
     def test_httpx_client_class_passed_on(self):
