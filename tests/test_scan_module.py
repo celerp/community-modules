@@ -164,6 +164,10 @@ class Network(unittest.TestCase):
             "tab in host": "U = '//cdn\\t.example/a.js'\n",
             "quote in user": "U = \"//u'@x.example/a\"\n",
             "angle bracket in user": "U = '//u<@x.example/a'\n",
+            "backslash after the slashes": "U = '//\\\\x.example/a'\n",
+            "tab after the slashes": "U = '//\\t/x.example/a'\n",
+            "newline after the slashes": "U = '//\\n/cdn.example/a.js'\n",
+            "full stop in bytes": "U = b'//x\\xe3\\x80\\x82example/a'\n",
         }.items():
             with self.subTest(name):
                 self.assertEqual(kinds(py(src)), {"network"})
@@ -172,6 +176,8 @@ class Network(unittest.TestCase):
                            "static/link.html": "<a href=//192.0.2.1>x</a>\n",
                            "static/tab.js": "const u = '//cdn\t.example/a';\n",
                            "static/user.html": "<img src=\"//u'@x.example/p.png\">\n",
+                           "static/slash.html": "<script src=\"//\\x.example/a.js\"></script>\n",
+                           "static/slash.js": "const u = '//\t/x.example/a';\n",
                            "static/site.css": "body{background:url(//x.example/a.png)}\n"}.items():
             with self.subTest(path):
                 files = py("x = 1\n")
@@ -190,7 +196,8 @@ class Network(unittest.TestCase):
     def test_double_slash_text_is_not_an_address(self):
         for src in ("U = '/api/foo'\n", "s = 'a // b'\n", "s = '//'\n",
                     "def f(root, name):\n    return root + '//' + name\n",
-                    "s = 'TODO // later'\n", "s = 'Use // to start a comment'\n"):
+                    "s = 'TODO // later'\n", "s = 'Use // to start a comment'\n",
+                    "P = r'^//\\w+$'\n", "U = r'//\\server\\share'\n"):
             with self.subTest(src=src):
                 self.assertEqual(kinds(py(src)), set())
         for path, text in {"static/app.js": "// TODO later\n//console.log(x)\n//@ts-ignore\n"
