@@ -215,7 +215,7 @@ SCRIPT_LITERAL = re.compile(rf"{QUOTED}|`(?:[^`\\]|\\.)*`?"
                             r"|\\(?:\\|x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|u\{[0-9a-fA-F]+\})", re.S)
 STYLE_NAME_CHAR = r"[\w-]|\\(?:[0-9a-fA-F]{1,6}[ \t\n\r\f]?|[^0-9a-fA-F\n\r\f])"
 STYLE_LITERAL = re.compile(
-    rf"/\*(?:[^*\n]|\*(?!/))*(?:\*/)?|{QUOTED}"
+    rf"/\*(?:[^*]|\*(?!/))*(?:\*/)?|{QUOTED}"
     rf"|(?<![\w\\-])((?:{STYLE_NAME_CHAR}){{3}})\((?:[^)\\]|\\.)*\)?", re.S)
 SCRIPT_ESCAPE = re.compile(r"\\(?:x([0-9a-fA-F]{2})|u([0-9a-fA-F]{4})|u\{([0-9a-fA-F]+)\}"
                            r"|([0-3][0-7]{0,2}|[4-7][0-7]?)|(\r\n|[^xu0-7]))")
