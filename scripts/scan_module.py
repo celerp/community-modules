@@ -12,8 +12,10 @@ handlers, migrations) must be the module's own package, and the files it reads
 
 Python is read with `ast`, names are resolved through the file's own imports, so
 `import os as o; o.system(...)` is seen as `os.system`. Browser code is read in
-script and page files and in the module's Python strings and bytes, docstrings
-left out unless the file reads them back through `__doc__`. Where the scan
+script, page and style sheet files and in the module's Python strings and bytes,
+docstrings left out unless the file reads them back through `__doc__`. A web
+address counts with a scheme (`https://host/...`) or without one (`//host/...`);
+an address or call built while the code runs is not followed. Where the scan
 cannot follow a name (a module such as `os` stored or passed as a value, an
 attribute name built at runtime) it reports that instead, as it does code that
 changes names in modules Python, Celerp or its libraries provide. It is a review
@@ -155,11 +157,15 @@ PATH_KEEPERS = ("pathlib.Path", "pathlib.PurePath", "str", "os.fspath", "os.path
 PATH_JOINERS = ("pathlib.Path", "pathlib.PurePath", "os.path.join")
 PATH_METHODS = ("resolve", "absolute", "joinpath", "with_suffix", "with_name", "as_posix")
 BAD_SEGMENT = re.compile(r"(^|[/\\])\.\.([/\\]|$)|^[/\\]|^[A-Za-z]:|^~")
-URL = re.compile(r"\b(?:https?|wss?|ftp)://", re.I)
+# An address without a scheme (//host/...) uses the page's own scheme to reach that
+# host. It needs a host-like authority, so "a // b" and comment slashes are not one.
+NETWORK_PATH = (r"(?<![\w:/.\\])//(?:\[[0-9a-f:.]+\]|(?:[a-z0-9-]+\.)+[a-z][a-z0-9-]+(?::\d+)?"
+                r"|[a-z0-9.-]+:\d+)(?=[/?#'\"`\s)]|$)")
+URL = re.compile(rf"\b(?:https?|wss?|ftp)://|{NETWORK_PATH}", re.I)
 
 DATA_SUFFIXES = {
     ".md", ".txt", ".rst", ".json", ".toml", ".yaml", ".yml", ".cfg", ".ini", ".csv",
-    ".css", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".po", ".pot", ".mo",
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".po", ".pot", ".mo",
     ".woff", ".woff2", ".ttf", ".otf", ".typed",
 }
 DATA_NAMES = {"license", "licence", "copying", "notice", "readme", "changelog", "authors",
@@ -177,9 +183,9 @@ NAMED_ATTRIBUTE = {"getattr": slice(1, 2), "operator.attrgetter": slice(None),
 MANIFEST = "PLUGIN_MANIFEST"
 ROUTE_KEYS = ("api_routes", "ui_routes")
 HANDLER_KEYS = ("handler", "render")
-SCRIPT_SUFFIXES = {".js", ".mjs", ".cjs", ".html", ".htm", ".svg"}
+SCRIPT_SUFFIXES = {".js", ".mjs", ".cjs", ".html", ".htm", ".svg", ".css"}
 JS_NETWORK = re.compile(r"\bfetch\s*\(|XMLHttpRequest|\bWebSocket\b|\bEventSource\b|"
-                        r"sendBeacon|\b(?:https?|wss?)://(?!www\.w3\.org/)")
+                        rf"sendBeacon|\b(?:https?|wss?)://(?!www\.w3\.org/)|(?i:{NETWORK_PATH})")
 JS_DYNAMIC = re.compile(r"\beval\s*\(|\bnew\s+Function\s*\(|\bimport\s*\(")
 
 
