@@ -230,6 +230,30 @@ class ManifestReferences(unittest.TestCase):
         files = {**OWN_FILES, "requests.py": "x = 1\n"}
         self.assertEqual(kinds(module(OWN, files)), {"dynamic_code"})
 
+    def test_own_package_named_like_a_library_celerp_imports(self):
+        # Celerp imports aiosmtplib only when it sends mail, and hands it the SMTP
+        # password; the module folder sits first on sys.path.
+        manifest = {"name": "acme", "api_routes": "aiosmtplib.routes"}
+        files = {"aiosmtplib/__init__.py": "async def send(message, **kw):\n    pass\n",
+                 "aiosmtplib/routes.py": "x = 1\n"}
+        found = scan_folder({k: v.encode() for k, v in module(manifest, files).items()})
+        self.assertEqual({f.kind for f in found}, {"dynamic_code"})
+        self.assertTrue(any("'aiosmtplib', a name Python, Celerp or a library" in f.detail
+                            for f in found))
+
+    def test_module_folder_named_like_a_library_celerp_imports(self):
+        # The modules directory is on sys.path too, so the folder itself is importable.
+        manifest = {"name": "botocore", "api_routes": "acme_w.routes"}
+        self.assertEqual(kinds(module(manifest, {"acme_w/__init__.py": "",
+                                                 "acme_w/routes.py": "x = 1\n"})),
+                         {"dynamic_code"})
+
+    def test_module_folder_named_like_the_standard_library(self):
+        manifest = {"name": "smtplib", "api_routes": "acme_w.routes"}
+        self.assertEqual(kinds(module(manifest, {"acme_w/__init__.py": "",
+                                                 "acme_w/routes.py": "x = 1\n"})),
+                         {"dynamic_code"})
+
     def test_locale_file_outside_the_folder(self):
         manifest = {**OWN, "locales": {"th": {"file": "../../other/th.json"}}}
         self.assertEqual(kinds(module(manifest, OWN_FILES)), {"files"})

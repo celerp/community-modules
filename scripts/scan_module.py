@@ -103,6 +103,26 @@ UI_CONFIG = "ui.config"
 # Top-level packages Celerp itself provides; a module's code reached through them
 # is checked as the standard module it names (ui.config.os.environ is os.environ).
 CORE_PACKAGES = ("celerp", "ui")
+# Top-level names of the libraries installed with Celerp, and of those its code
+# imports when present. The module folder and the modules directory sit first on
+# sys.path, so a module named like one of these would be what Celerp imports.
+# Generated from celerp origin/main 19c83f23: packages_distributions() in a fresh
+# venv of its dependencies and its prod extra, plus botocore, aiobotocore and tomli.
+CELERP_LIBRARIES = frozenset({
+    "PIL", "aiobotocore", "aiofiles", "aiosmtplib", "alembic", "annotated_doc",
+    "annotated_types", "anyio", "asyncpg", "barcode", "bcrypt", "botocore", "bs4",
+    "celerp_postgres", "certifi", "cffi", "charset_normalizer", "click", "cryptography",
+    "dateutil", "default_modules", "deprecated", "dotenv", "ecdsa", "et_xmlfile",
+    "fastapi", "fastcore", "fasthtml", "greenlet", "gunicorn", "h11", "httpcore",
+    "httpcore2", "httptools", "httpx", "httpx2", "idna", "itsdangerous", "jose",
+    "limits", "mako", "markupsafe", "multipart", "numpy", "oauthlib", "openpyxl",
+    "opentelemetry", "packaging", "passlib", "psutil", "psycopg2", "pyasn1",
+    "pycparser", "pydantic", "pydantic_core", "pydantic_settings", "pypdf",
+    "python_multipart", "qrcode", "reportlab", "rsa", "six", "slowapi", "soupsieve",
+    "sqlalchemy", "starlette", "tomli", "truststore", "typing_extensions",
+    "typing_inspection", "tzdata", "uvicorn", "uvloop", "watchfiles", "websockets",
+    "wrapt", "yaml"
+})
 FILE_CALLS = (
     "open", "io.open", "os.open", "os.remove", "os.unlink", "os.rename", "os.renames",
     "os.replace", "os.rmdir", "os.removedirs", "os.mkdir", "os.makedirs", "os.listdir",
@@ -156,7 +176,10 @@ def _is_test(path: PurePosixPath) -> bool:
 def _reserved(top: str) -> bool:
     """A top-level name Python or Celerp already provides."""
     return top in sys.stdlib_module_names or _matches(top, CORE_PACKAGES) \
-        or top.startswith("celerp")
+        or top.startswith("celerp") or top in CELERP_LIBRARIES
+
+
+PROVIDED = "a name Python, Celerp or a library Celerp uses already provides"
 
 
 def _secret_config(name: str) -> bool:
@@ -487,9 +510,17 @@ def _manifest_findings(files: dict[str, bytes]) -> list[Finding]:
     def check(key: str, dotted, package: bool = False) -> None:
         if isinstance(dotted, str) and _own_code(dotted, files, name, package):
             own.add(dotted.split(".")[0])
+        elif isinstance(dotted, str) and _reserved(dotted.split(".")[0]):
+            found.append(Finding("dynamic_code", "__init__.py", lines.get(dotted, 1),
+                                 f"manifest {key} {dotted!r} is named like "
+                                 f"{dotted.split('.')[0]!r}, {PROVIDED}"))
         elif dotted:
             found.append(Finding("dynamic_code", "__init__.py", lines.get(dotted, 1),
                                  f"manifest {key} {dotted!r} is not the module's own code"))
+
+    if isinstance(name, str) and _reserved(name):
+        found.append(Finding("dynamic_code", "__init__.py", lines.get(name, 1),
+                             f"the module folder is importable as {name!r}, {PROVIDED}"))
 
     for key in ROUTE_KEYS:
         check(key, manifest.get(key))
