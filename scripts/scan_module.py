@@ -183,12 +183,14 @@ URL = re.compile(rf"\b(?:https?|wss?|ftp)://|{NETWORK_PATH}", re.I)
 # Characters a browser's URL parser drops or reads as another: tab and newline, the
 # characters IDNA ignores in a host (soft hyphen, zero-width characters, variation
 # selectors, Hangul fillers; from a Chromium scan of every code point), the ideographic
-# full stop NFKC leaves as it is, and a backslash.
+# full stop NFKC leaves as it is, a backslash, and letters and digits a browser folds that
+# are newer than the Unicode data of the Python running the scan (outlined A-Z and 0-9).
 LINE_BREAK = re.compile(r"[\t\n\r]")
 IGNORED = re.compile("[\u00ad\u034f\u115f\u1160\u17b4\u17b5\u180b-\u180f\u200b\u2060-\u2064"
                      "\u206a-\u206f\u3164\ufe00-\ufe0f\ufeff\uffa0\U0001bca0-\U0001bca3"
-                     "\U0001d173-\U0001d17a]")
-BROWSER_READS = str.maketrans({"\u3002": ".", "\\": "/"})
+                     "\U0001d173-\U0001d17a\U000e0100-\U000e01ef]")
+BROWSER_READS = str.maketrans({"\u3002": ".", "\\": "/", "\ua7f1": "s", **{
+    chr(0x1ccd6 + i): c for i, c in enumerate("abcdefghijklmnopqrstuvwxyz0123456789")}})
 
 DATA_SUFFIXES = {
     ".md", ".txt", ".rst", ".json", ".toml", ".yaml", ".yml", ".cfg", ".ini", ".csv",
