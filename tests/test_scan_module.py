@@ -314,6 +314,9 @@ class Network(unittest.TestCase):
                 files[name] = text
                 self.assertEqual(kinds(files), {"network"})
         self.assertEqual(kinds(py("H = '//x&#" + "9" * 5000 + ";example/a'\n")), set())
+        # A style comment runs across lines, so a quote on its second line is in it too.
+        src = "S = \"/* note\\nit's */ a{background:url('//x\\\\2e example/a')}\"\n"
+        self.assertEqual(kinds(py(src)), {"network"})
 
     def test_percent_decoded_as_far_as_a_browser_does(self):
         # A browser decodes %XX once; only a % that folding then makes (from a fullwidth
