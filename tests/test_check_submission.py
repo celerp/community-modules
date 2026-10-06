@@ -345,7 +345,7 @@ class Comments(Case):
         text = comment(self.run_review())
         self.assertIn("changes needed", text.lower())
         self.assertIn("push", text.lower())
-        self.assertNotIn("—", text)
+        self.assertNotIn("\u2014", text)
 
     def test_flag_comment_lists_findings(self):
         self.gh.downloads[archive_url()] = module_zip(module_files(extra={

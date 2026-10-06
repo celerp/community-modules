@@ -383,7 +383,7 @@ def review(*, base: dict, head: dict, changed: list[str], author: str, associati
 
 
 def _bullets(items: list[str]) -> str:
-    return "\n".join("- " + i.replace("@", "@​").replace("—", "-") for i in items)
+    return "\n".join("- " + i.replace("@", "@\u200b").replace("\u2014", "-") for i in items)
 
 
 def comment(result: Result) -> str:
