@@ -298,6 +298,23 @@ class Network(unittest.TestCase):
             with self.subTest(src=src):
                 self.assertEqual(kinds(py(src)), set())
 
+    def test_escapes_read_past_a_stray_quote_and_in_octal(self):
+        # A quote outside a string (in a comment or in page text) does not hide the escapes
+        # of a later string; sloppy script reads an octal escape (\\56 is "."); a numeric
+        # character reference of any length is read as markup reads it.
+        for name, text in (
+                ("static/a.js", "/* don't */ var u = '//x\\x2eexample/a';\n"),
+                ("static/a.html", "<p>Don't</p><script>u = '//x\\x2eexample/a'</script>\n"),
+                ("static/a.css", "/* it's */ a{background:url('//x\\2e example/a')}\n"),
+                ("static/a.js", "var u = '//x\\56example/a';\n"),
+                ("static/a.js", "var u = '//x\\056example/a';\n"),
+                ("static/a.html", '<img src="//x&#' + "0" * 5000 + '46;example/a">\n')):
+            with self.subTest(text=text[:60]):
+                files = py("x = 1\n")
+                files[name] = text
+                self.assertEqual(kinds(files), {"network"})
+        self.assertEqual(kinds(py("H = '//x&#" + "9" * 5000 + ";example/a'\n")), set())
+
     def test_percent_decoded_as_far_as_a_browser_does(self):
         # A browser decodes %XX once; only a % that folding then makes (from a fullwidth
         # sign) is decoded again. A % the first decode leaves, or a third level, is not.
