@@ -141,14 +141,15 @@ counts when it is written with a scheme (`https://host/...`). One written
 without a scheme (`//host/...`) counts when its host is an IPv6 address in
 brackets, or has a dot or colon with more of the host after it; a single word
 such as `//name/` does not. Text is read the way a browser reads an address,
-with tab and newline characters dropped, backslashes as slashes, look-alike
-characters folded and percent-encoding decoded, before it is matched. An address
-or call built while the code runs, from pieces, variables or lookups, is not
-followed. It does not follow every way Python can reach a name, for example
-through attributes of other objects, private names inside standard modules, or
-binding orders Python resolves differently than the scan reads them, so a passed
-check is not proof that a module does only what it declares. Anything it cannot
-follow is left to a human reviewer.
+with tab and newline characters dropped (and, separately, read as a space
+between two addresses), backslashes as slashes, look-alike characters folded,
+characters IDNA ignores dropped and percent-encoding decoded, before it is
+matched. An address or call built while the code runs, from pieces, variables or
+lookups, is not followed. It does not follow every way Python can reach a name,
+for example through attributes of other objects, private names inside standard
+modules, or binding orders Python resolves differently than the scan reads them,
+so a passed check is not proof that a module does only what it declares.
+Anything it cannot follow is left to a human reviewer.
 
 ### What happens next
 

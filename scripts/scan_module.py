@@ -18,15 +18,16 @@ address counts with a scheme (`https://host/...`). One without a scheme
 (`//host/...`) counts when its host is an IPv6 address in brackets, or has a dot
 or colon with more of the host after it; a single word such as `//name/` does
 not. Text is read the way a browser reads an address, with tab and newline
-characters dropped, backslashes as slashes, look-alike characters folded and
-percent-encoding decoded, before it is matched. An address or call built while
-the code runs is not followed. Where the scan cannot follow a name (a module
-such as `os` stored or passed as a value, an attribute name built at runtime) it
-reports that instead, as it does code that changes names in modules Python,
-Celerp or its libraries provide. It is a review aid, not a security boundary: it
-reports the ordinary ways of doing these things, not every way Python can reach
-a name, and a clean scan is not proof of what the code does. Test files are left
-out unless the module's own code imports them.
+characters dropped (and, separately, read as a space between two addresses),
+backslashes as slashes, look-alike characters folded, characters IDNA ignores
+dropped and percent-encoding decoded, before it is matched. An address or call
+built while the code runs is not followed. Where the scan cannot follow a name
+(a module such as `os` stored or passed as a value, an attribute name built at
+runtime) it reports that instead, as it does code that changes names in modules
+Python, Celerp or its libraries provide. It is a review aid, not a security
+boundary: it reports the ordinary ways of doing these things, not every way
+Python can reach a name, and a clean scan is not proof of what the code does.
+Test files are left out unless the module's own code imports them.
 """
 from __future__ import annotations
 
@@ -170,7 +171,7 @@ BAD_SEGMENT = re.compile(r"(^|[/\\])\.\.([/\\]|$)|^[/\\]|^[A-Za-z]:|^~")
 # accepts) or has a . or : followed by something other than . , ; : ! ("//done." and
 # "//TODO: x" are text). A host followed by ( is a call, as in "//console.log(x)", and
 # "a // b" or a single word ("//intranet/") is not an address.
-# The pattern reads plain ASCII; _as_browser_reads turns other spellings into it.
+# The pattern reads plain ASCII; _readings turns other spellings into it.
 USER_CHAR = r"[^\s/\\?#]"
 HOST_CHAR = r"[^\s/\\?#'\"`<>()]"
 NETWORK_PATH = (rf"(?<![\w:/.\\])//+"
@@ -179,9 +180,15 @@ NETWORK_PATH = (rf"(?<![\w:/.\\])//+"
                 rf"[^\s/\\?#'\"`<>().,;:!])"
                 rf"(?={HOST_CHAR}*?[^\W_])(?={HOST_CHAR}*(?!{HOST_CHAR}|\())")
 URL = re.compile(rf"\b(?:https?|wss?|ftp)://|{NETWORK_PATH}", re.I)
-# Characters a browser's URL parser drops (tab, newline) or reads as another: the
-# ideographic full stop NFKC leaves as it is, and a backslash.
-BROWSER_READS = str.maketrans({"\t": None, "\n": None, "\r": None, "\u3002": ".", "\\": "/"})
+# Characters a browser's URL parser drops or reads as another: tab and newline, the
+# characters IDNA ignores in a host (soft hyphen, zero-width characters, variation
+# selectors, Hangul fillers; from a Chromium scan of every code point), the ideographic
+# full stop NFKC leaves as it is, and a backslash.
+LINE_BREAK = re.compile(r"[\t\n\r]")
+IGNORED = re.compile("[\u00ad\u034f\u115f\u1160\u17b4\u17b5\u180b-\u180f\u200b\u2060-\u2064"
+                     "\u206a-\u206f\u3164\ufe00-\ufe0f\ufeff\uffa0\U0001bca0-\U0001bca3"
+                     "\U0001d173-\U0001d17a]")
+BROWSER_READS = str.maketrans({"\u3002": ".", "\\": "/"})
 
 DATA_SUFFIXES = {
     ".md", ".txt", ".rst", ".json", ".toml", ".yaml", ".yml", ".cfg", ".ini", ".csv",
@@ -621,7 +628,7 @@ class _File:
                   and id(node) not in bare_strings):
                 # Script and HTML built in Python reach the browser like a .js file.
                 text = node.value if isinstance(node.value, str) else _bytes_text(node.value)
-                readings = (text, _as_browser_reads(text))
+                readings = _readings(text)
                 if any(map(URL.search, readings)):
                     self.add("network", node, "a web address in the code")
                 elif any(map(JS_NETWORK.search, readings)):
@@ -838,15 +845,28 @@ def _bytes_text(data: bytes) -> str:
         return data.decode("latin-1")
 
 
-def _as_browser_reads(text: str) -> str:
-    """Text as a browser's URL parser reads it: tab and newline dropped, look-alike
-    characters folded (NFKC), %XX decoded once and a backslash read as a slash.
+def _readings(text: str) -> tuple[str, str, str]:
+    """Text as written and as a browser reads it, with a line break dropped (inside one
+    address: "ht\\ttps://") and read as a space (between two, as in a list of addresses).
 
-    The scan matches this and the text as written, since dropping a line break joins
-    the last word of a line to the next one ("x\\nfetch(u)" reads "xfetch(u)").
+    The text as written is matched too, as dropping a line break joins the last word of a
+    line to the next one ("x\\nfetch(u)" reads "xfetch(u)").
     """
-    folded = unicodedata.normalize("NFKC", text).translate(BROWSER_READS)
-    return unicodedata.normalize("NFKC", unquote(folded)).translate(BROWSER_READS)
+    return (text, *(_as_browser_reads(LINE_BREAK.sub(gap, text)) for gap in ("", " ")))
+
+
+def _as_browser_reads(text: str) -> str:
+    """Text as a browser's URL parser reads it: look-alike characters folded (NFKC), the
+    ones IDNA ignores dropped, a backslash read as a slash and %XX decoded. A host is
+    decoded, folded and decoded again ("%EF%BC%852e" reads "\uff052e", "%2e", then ".")."""
+    text = _fold(text)
+    for _ in range(2):
+        text = _fold(unquote(text))
+    return text
+
+
+def _fold(text: str) -> str:
+    return IGNORED.sub("", unicodedata.normalize("NFKC", text)).translate(BROWSER_READS)
 
 
 def _scan_script(path: str, data: bytes) -> list[Finding]:
@@ -856,7 +876,7 @@ def _scan_script(path: str, data: bytes) -> list[Finding]:
         return [Finding("unreadable", path, 1, "not UTF-8 text")]
     found = []
     for lineno, line in enumerate(text.splitlines(), 1):
-        readings = (line, _as_browser_reads(line))
+        readings = _readings(line)
         if any(map(JS_NETWORK.search, readings)):
             found.append(Finding("network", path, lineno, "browser network call"))
         if any(map(JS_DYNAMIC.search, readings)):
