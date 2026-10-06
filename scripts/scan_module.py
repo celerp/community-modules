@@ -10,16 +10,17 @@ The manifest is read the same way: the code Celerp imports from it (routes, slot
 handlers, migrations) must be the module's own package, and the files it reads
 (locales) must be in the folder.
 
-Python is read with `ast`, names are resolved through the file's own imports,
-so `import os as o; o.system(...)` is seen as `os.system`. Browser code is read
-in script and page files and in the module's Python strings and bytes,
-docstrings left out. Where the scan cannot follow a name (a module such as `os`
-stored or passed as a value, an attribute name built at runtime) it reports that
-instead, as it does code that changes names in modules Python, Celerp or its
-libraries provide. It is a review aid, not a security boundary: it reports the
-ordinary ways of doing these things, not every way Python can reach a name, and
-a clean scan is not proof of what the code does. Test files are left out unless
-the module's own code imports them.
+Python is read with `ast`, names are resolved through the file's own imports, so
+`import os as o; o.system(...)` is seen as `os.system`. Browser code is read in
+script and page files and in the module's Python strings and bytes, docstrings
+left out unless the file reads them back through `__doc__`. Where the scan
+cannot follow a name (a module such as `os` stored or passed as a value, an
+attribute name built at runtime) it reports that instead, as it does code that
+changes names in modules Python, Celerp or its libraries provide. It is a review
+aid, not a security boundary: it reports the ordinary ways of doing these
+things, not every way Python can reach a name, and a clean scan is not proof of
+what the code does. Test files are left out unless the module's own code imports
+them.
 """
 from __future__ import annotations
 
@@ -540,8 +541,14 @@ class _File:
         return ids
 
     def scan(self) -> list[Finding]:
-        bare_strings = {id(n.value) for n in ast.walk(self.tree)
-                        if isinstance(n, ast.Expr) and isinstance(n.value, ast.Constant)}
+        # Docstrings are not code, unless the file reads them back through __doc__.
+        reads_doc = any((isinstance(n, ast.Name) and n.id == "__doc__")
+                        or (isinstance(n, ast.Attribute) and n.attr == "__doc__")
+                        or (isinstance(n, ast.Constant) and n.value == "__doc__")
+                        for n in ast.walk(self.tree))
+        bare_strings = set() if reads_doc else {
+            id(n.value) for n in ast.walk(self.tree)
+            if isinstance(n, ast.Expr) and isinstance(n.value, ast.Constant)}
         read_by_attribute = {id(n.value) for n in ast.walk(self.tree)
                              if isinstance(n, ast.Attribute)}
         followed = self._followed()
