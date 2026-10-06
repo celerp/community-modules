@@ -92,6 +92,43 @@ class Merges(Gate):
         self.assertTrue(any(MARKER in c and "passed" in c for c in self.comments()))
 
 
+class MergeOutcome(Gate):
+    """The outcome comment records the check as answered, so it is written only once
+    the merge's outcome is known."""
+
+    def put_fails(self, error: BaseException, *, merged: bool) -> None:
+        def put(path, body):
+            self.gh.writes.append(("PUT", path, body))
+            if merged:
+                self.pr.update(state="closed", merged=True)
+            raise error
+        self.gh.put = put
+
+    def test_comment_follows_the_merge(self):
+        writes = [w[0] for w in self.run_gate()]
+        self.assertEqual(writes, ["PUT", "POST"])
+
+    def test_merge_whose_answer_was_lost_is_reported_as_merged(self):
+        self.put_fails(ApiError("PUT merge: timed out"), merged=True)
+        self.run_gate()
+        [body] = self.comments()
+        self.assertIn("passed", body)
+        self.assertNotIn("not merged", body)
+
+    def test_merge_that_did_not_happen_is_reported(self):
+        self.put_fails(ApiError("PUT merge: HTTP 405"), merged=False)
+        self.run_gate()
+        [body] = self.comments()
+        self.assertIn("not merged", body)
+        self.assertNotIn("refused", body)
+
+    def test_job_stopping_at_the_merge_leaves_the_check_unanswered(self):
+        self.put_fails(SystemExit(1), merged=False)
+        with self.assertRaises(SystemExit):
+            self.run_gate()
+        self.assertEqual(self.comments(), [])
+
+
 class Refuses(Gate):
     def assertNoMerge(self):
         self.assertEqual(self.merges(), [])

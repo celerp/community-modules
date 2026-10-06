@@ -8,7 +8,9 @@ check's result artifact and the pull request through the GitHub API.
 Each run, and an hourly scheduled run, handles every open pull request whose
 latest completed check has no outcome yet, not only the one that triggered it.
 The outcome comment records the check run it answers, so a check is handled
-once even when the run that was started for it never ran.
+once even when the run that was started for it never ran. For a pass it is
+written once the merge's outcome is known, so a run that stops before then is
+retried.
 
 The check runs on pull_request_target from the default branch, so its result
 comes from this repository's own scripts; only a run of that workflow, for
@@ -55,7 +57,7 @@ BRANCH_MOVED = ("## Listing check: run again\n\n"
                 "The catalog changed after this check ran, so it was not merged. Push a new "
                 "commit (an empty one is fine) to check it against the current catalog.\n")
 NOT_MERGED = ("## Listing check: not merged\n\n"
-              "The check passed but GitHub refused the merge. A maintainer will look at it.\n")
+              "The check passed but the merge did not go through. A maintainer will look at it.\n")
 
 
 def _artifact_result(gh, base: str, run_id: int) -> dict | None:
@@ -162,11 +164,14 @@ def _handle_pr(gh, base: str, default: str, number: int, maintainers: set[str]) 
     if gh.get(f"{base}/branches/{default}")["commit"]["sha"] != result["base_sha"]:
         say(BRANCH_MOVED)
         return
-    say(result["comment"])
     try:
         gh.put(f"{base}/pulls/{number}/merge", {"merge_method": "squash", "sha": head})
     except ApiError:
-        say(NOT_MERGED)
+        # The answer can be lost after GitHub merged, so ask again before saying no.
+        if not gh.get(f"{base}/pulls/{number}").get("merged"):
+            say(NOT_MERGED)
+            return
+    say(result["comment"])
 
 
 def handle(event: dict, repo: str, gh, maintainers: set[str] = frozenset()) -> None:
