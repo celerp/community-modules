@@ -205,7 +205,8 @@ BROWSER_READS = str.maketrans({"\u3002": ".", "\\": "/", "\ua7f1": "s", **{
 # character). Outside them, where a stray quote can hide a string, \xHH, \uHHHH and
 # \u{H...} are read too. Style sheet strings and url(), whose three letters may be
 # escaped too: \ and 1 to 6 hex digits with one optional space after them, or \ before
-# any other character (that character); comments are left as written. Markup reads
+# any other character (that character); comments are left as written. Outside strings,
+# url() and comments, \ and hex digits are read too, as in script. Markup reads
 # character references (&#46;, &period;) with the standard library, a decimal one longer
 # than any code point first shortened to one. A literal without its closing quote or
 # bracket runs as far as it can go, so every literal that starts matches and reading
@@ -216,7 +217,8 @@ SCRIPT_LITERAL = re.compile(rf"{QUOTED}|`(?:[^`\\]|\\.)*`?"
 STYLE_NAME_CHAR = r"[\w-]|\\(?:[0-9a-fA-F]{1,6}[ \t\n\r\f]?|[^0-9a-fA-F\n\r\f])"
 STYLE_LITERAL = re.compile(
     rf"/\*(?:[^*]|\*(?!/))*(?:\*/)?|{QUOTED}"
-    rf"|(?<![\w\\-])((?:{STYLE_NAME_CHAR}){{3}})\((?:[^)\\]|\\.)*\)?", re.S)
+    rf"|(?<![\w\\-])((?:{STYLE_NAME_CHAR}){{3}})\((?:[^)\\]|\\.)*\)?"
+    r"|\\(?:\\|[0-9a-fA-F]{1,6}(?:\r\n|[ \t\n\r\f])?)", re.S)
 SCRIPT_ESCAPE = re.compile(r"\\(?:x([0-9a-fA-F]{2})|u([0-9a-fA-F]{4})|u\{([0-9a-fA-F]+)\}"
                            r"|([0-3][0-7]{0,2}|[4-7][0-7]?)|(\r\n|[^xu0-7]))")
 CHARACTER_REFERENCE = re.compile(r"&#0*([0-9]+)")
@@ -913,8 +915,9 @@ def _style_text(text: str) -> str:
 
 
 def _style_literal(literal: re.Match[str]) -> str:
-    """A style string, or a function whose name reads "url", with its escapes read."""
-    if literal[0].startswith("/*"):
+    """A style string, a function whose name reads "url", or a hex escape outside them,
+    with its escapes read. A comment or an escaped backslash stays as written."""
+    if literal[0].startswith("/*") or literal[0] == "\\\\":
         return literal[0]
     if literal[1] is not None and STYLE_ESCAPE.sub(_style_char, literal[1]).lower() != "url":
         return literal[0]
