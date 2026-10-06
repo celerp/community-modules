@@ -17,21 +17,23 @@ docstrings left out unless the file reads them back through `__doc__`. A web
 address counts with a scheme (`https://host/...`). One without a scheme
 (`//host/...`) counts when its host is an IPv6 address in brackets, or has a dot
 or colon with more of the host after it; a single word such as `//name/` does
-not. Text is read the way a browser reads an address, with tab and newline
-characters dropped (and, separately, read as a space between two addresses),
-backslashes as slashes, look-alike characters folded, characters IDNA ignores
-dropped and percent-encoding decoded, before it is matched. An address or call
-built while the code runs is not followed. Where the scan cannot follow a name
-(a module such as `os` stored or passed as a value, an attribute name built at
-runtime) it reports that instead, as it does code that changes names in modules
-Python, Celerp or its libraries provide. It is a review aid, not a security
-boundary: it reports the ordinary ways of doing these things, not every way
-Python can reach a name, and a clean scan is not proof of what the code does.
-Test files are left out unless the module's own code imports them.
+not. Text is read the way a browser reads an address, with markup and script
+escapes (`&#46;`, `\\x2e`) decoded, tab and newline characters dropped (and,
+separately, read as a space between two addresses), backslashes as slashes,
+look-alike characters folded, characters IDNA ignores dropped and
+percent-encoding decoded, before it is matched. An address or call built while
+the code runs is not followed. Where the scan cannot follow a name (a module
+such as `os` stored or passed as a value, an attribute name built at runtime) it
+reports that instead, as it does code that changes names in modules Python,
+Celerp or its libraries provide. It is a review aid, not a security boundary: it
+reports the ordinary ways of doing these things, not every way Python can reach
+a name, and a clean scan is not proof of what the code does. Test files are left
+out unless the module's own code imports them.
 """
 from __future__ import annotations
 
 import ast
+import html
 import posixpath
 import re
 import sys
@@ -191,6 +193,9 @@ IGNORED = re.compile("[\u00ad\u034f\u115f\u1160\u17b4\u17b5\u180b-\u180f\u200b\u
                      "\U0001d173-\U0001d17a\U000e0100-\U000e01ef]")
 BROWSER_READS = str.maketrans({"\u3002": ".", "\\": "/", "\ua7f1": "s", **{
     chr(0x1ccd6 + i): c for i, c in enumerate("abcdefghijklmnopqrstuvwxyz0123456789")}})
+# Script escapes (\x2e, \u002e, \u{2e}) a script decodes before a browser reads the address;
+# an escaped backslash is kept as written, so it never starts an escape.
+SCRIPT_ESCAPE = re.compile(r"\\(?:x([0-9a-fA-F]{2})|u([0-9a-fA-F]{4})|u\{([0-9a-fA-F]{1,6})\}|\\)")
 
 DATA_SUFFIXES = {
     ".md", ".txt", ".rst", ".json", ".toml", ".yaml", ".yml", ".cfg", ".ini", ".csv",
@@ -848,13 +853,20 @@ def _bytes_text(data: bytes) -> str:
 
 
 def _readings(text: str) -> tuple[str, str, str]:
-    """Text as written and as a browser reads it, with a line break dropped (inside one
-    address: "ht\\ttps://") and read as a space (between two, as in a list of addresses).
+    """Text as written and as a browser reads it once markup (&#46;) and script (\\x2e)
+    escapes are decoded, with a line break dropped (inside one address: "ht\\ttps://") and
+    read as a space (between two, as in a list of addresses).
 
     The text as written is matched too, as dropping a line break joins the last word of a
     line to the next one ("x\\nfetch(u)" reads "xfetch(u)").
     """
-    return (text, *(_as_browser_reads(LINE_BREAK.sub(gap, text)) for gap in ("", " ")))
+    unescaped = SCRIPT_ESCAPE.sub(_script_char, html.unescape(text))
+    return (text, *(_as_browser_reads(LINE_BREAK.sub(gap, unescaped)) for gap in ("", " ")))
+
+
+def _script_char(escape: re.Match[str]) -> str:
+    digits = escape[1] or escape[2] or escape[3]
+    return chr(int(digits, 16)) if digits and int(digits, 16) < 0x110000 else escape[0]
 
 
 def _as_browser_reads(text: str) -> str:
