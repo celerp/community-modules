@@ -238,7 +238,17 @@ class Network(unittest.TestCase):
         # A browser decodes a host, folds it as IDNA does (dropping a soft hyphen or
         # zero-width character) and decodes it again: %EF%BC%85 is a fullwidth percent sign.
         for src in ("U = '//x%EF%BC%852eexample/a'\n", "U = '//x%EF%B9%AA2eexample/a'\n",
-                    "U = '//x\\uff05\\u00ad2eexample/a'\n", "U = '//x\\uff052\\u200beexample/a'\n"):
+                    "U = '//x\\uff05\\u00ad2eexample/a'\n", "U = '//x\\uff052\\u200beexample/a'\n",
+                    "U = '//x\\uff05\\U000e01002eexample/a'\n",
+                    "U = '//x%EF%BC%85%F3%A0%87%AF%32eexample/a'\n"):
+            with self.subTest(src=src):
+                self.assertEqual(kinds(py(src)), {"network"})
+
+    def test_letters_newer_than_the_unicode_data(self):
+        # A browser folds outlined letters and digits (Unicode 16) to ASCII; the Python
+        # running the scan may not know them.
+        for src in ("U = '//x\\uff05\\U0001ccf2\\U0001ccdaexample/a'\n",
+                    "U = '//\\U0001ccd6.\\U0001ccd7/a'\n", "U = '//\\ua7f1\\U0001cce8.\\U0001ccd7/a'\n"):
             with self.subTest(src=src):
                 self.assertEqual(kinds(py(src)), {"network"})
 
