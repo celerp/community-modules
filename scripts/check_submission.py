@@ -41,7 +41,7 @@ from gen_readme import regenerate
 from github_api import ApiError, GitHub, NotFound, TooLarge
 from listing import CODEOWNERS, LISTING_FILES, code_owners, is_maintainer
 from scan_module import KINDS, manifest_node, read_manifest, scan_folder
-from validate_index import check as validate
+from validate_index import REPO_URL, check as validate
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 MB = 1024 * 1024
@@ -52,8 +52,6 @@ ARCHIVE_CAP_TEXT = "50 MB"
 UNPACKED_CAP_TEXT = "200 MB"
 # A file name only Celerp itself may write into an installed module.
 RESERVED_FILES = (".celerp-premium",)
-REPO_URL = re.compile(r"https://github\.com/([A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)/"
-                      r"([A-Za-z0-9._-]+)")
 # The module template's lint rules, at a fixed commit, with the file's sha256.
 TEMPLATE_REPO = "celerp/celerp-module-template"
 TEMPLATE_COMMIT = "f863c419441a527e291503d50c53cbd126d13454"
@@ -129,11 +127,7 @@ def _changed_entry(base: dict, head: dict) -> tuple[dict, dict | None, list[str]
 
 
 def _ownership_problems(entry: dict, old: dict | None, author: str) -> list[str]:
-    owner = _owner_of(entry["repo"])
-    if owner is None:
-        raise _Stop([f"repo is {_q(entry['repo'])}. It must be the address of a public GitHub "
-                     "repository, exactly https://github.com/<owner>/<repository> with nothing "
-                     "after the repository name."])
+    owner = _owner_of(entry["repo"])  # the schema has checked its form
     problems = []
     if owner.lower() != author.lower():
         problems.append(
@@ -323,8 +317,7 @@ def review(*, base: dict, head: dict, changed: list[str], author: str, associati
             base_index = json.loads(base["index.json"])
         except ValueError as exc:
             raise _Stop([f"index.json is not valid JSON: {exc}"]) from None
-        schema = json.loads((ROOT / "schema" / "index.schema.json").read_text(encoding="utf-8"))
-        invalid = validate(head_index, schema)
+        invalid = validate(head_index)
         if invalid:
             raise _Stop([f"index.json: {p}" for p in invalid])
         try:

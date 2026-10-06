@@ -30,8 +30,8 @@
         "tier": { "enum": ["community", "verified", "official"] },
         "repo": {
           "type": "string",
-          "pattern": "^https://",
-          "description": "Public repository with readable source. Required for community and verified tiers."
+          "pattern": "^https://github\\.com/([A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?)/((?!\\.\\.?$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100})$",
+          "description": "Public GitHub repository with readable source, exactly https://github.com/<owner>/<repository>: no .git, no further path, query, fragment, user or port. Required for community and verified tiers."
         },
         "commit": {
           "type": "string",

@@ -7,6 +7,7 @@ Policy rules on top of the schema:
   - ids are unique and the list is sorted by (tier rank, id)
   - the "celerp-" id prefix is reserved for the official tier
   - community and verified tiers require a public repo and its commit
+  - repo is exactly https://github.com/<owner>/<repository> (the schema's pattern)
   - community and verified tiers require data_access and network_calls
   - community tier carries no version (the module's own manifest is the version)
   - verified tier requires sha256
@@ -19,19 +20,42 @@ from __future__ import annotations
 import copy
 import json
 import pathlib
+import re
 import sys
 
 import jsonschema
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+SCHEMA = json.loads((ROOT / "schema" / "index.schema.json").read_text(encoding="utf-8"))
 TIER_RANK = {"official": 0, "verified": 1, "community": 2}
+# The repository address, with the owner and repository name as its two groups.
+REPO_URL = re.compile(SCHEMA["$defs"]["module"]["properties"]["repo"]["pattern"])
+REPO_FORMAT = ("must be the address of a public GitHub repository, exactly "
+               "https://github.com/<owner>/<repository> with nothing after the repository name")
 
 
-def check(index: dict, schema: dict) -> list[str]:
+def _ecma(pattern: str) -> re.Pattern:
+    """A schema pattern as JSON Schema reads it: $ is the end of the string. Python's $
+    also matches before a final newline. The patterns here use $ only as an anchor."""
+    return re.compile(re.sub(r"(?<!\\)\$", r"\\Z", pattern))
+
+
+def _pattern(validator, pattern, instance, schema):
+    if validator.is_type(instance, "string") and not _ecma(pattern).search(instance):
+        yield jsonschema.ValidationError(f"{instance!r} does not match {pattern!r}")
+
+
+Validator = jsonschema.validators.extend(jsonschema.Draft202012Validator, {"pattern": _pattern})
+
+
+def check(index: dict) -> list[str]:
     problems: list[str] = []
-    validator = jsonschema.Draft202012Validator(schema)
-    for err in validator.iter_errors(index):
-        problems.append(f"schema: {'/'.join(str(p) for p in err.path)}: {err.message}")
+    for err in Validator(SCHEMA).iter_errors(index):
+        where = "/".join(str(p) for p in err.path)
+        if err.validator == "pattern" and where.endswith("/repo"):
+            problems.append(f"schema: {where}: repo is {err.instance!r}. It {REPO_FORMAT}.")
+        else:
+            problems.append(f"schema: {where}: {err.message}")
     if problems:
         return problems  # policy checks assume a schema-valid document
 
@@ -62,7 +86,6 @@ def check(index: dict, schema: dict) -> list[str]:
 
 
 def selftest() -> int:
-    schema = json.loads((ROOT / "schema" / "index.schema.json").read_text(encoding="utf-8"))
     base = {
         "schema_version": 1,
         "modules": [
@@ -72,7 +95,13 @@ def selftest() -> int:
              "data_access": "Its own records.", "network_calls": "None."},
         ],
     }
-    assert check(base, schema) == [], "valid fixture must pass"
+    assert check(base) == [], "valid fixture must pass"
+    for url in ("https://github.com/a-b/c.d_e-f", "https://github.com/A1/B2",
+                f"https://github.com/{'a' * 39}/{'b' * 100}", "https://github.com/a/.github",
+                "https://github.com/a/b..c", "https://github.com/a/git"):
+        doc = copy.deepcopy(base)
+        doc["modules"][0]["repo"] = url
+        assert check(doc) == [], f"{url} must pass"
 
     def broken(mutate) -> dict:
         doc = copy.deepcopy(base)
@@ -89,6 +118,33 @@ def selftest() -> int:
         "community without commit": broken(lambda ms: ms[0].pop("commit")),
         "short commit": broken(lambda ms: ms[0].update(commit="abc1234")),
         "branch name as commit": broken(lambda ms: ms[0].update(commit="main")),
+        "upper-case commit": broken(lambda ms: ms[0].update(commit="A" * 40)),
+        "commit with a newline": broken(lambda ms: ms[0].update(commit="a" * 40 + "\n")),
+        **{f"repo {label}": broken(lambda ms, url=url: ms[0].update(repo=url)) for label, url in {
+            "not on GitHub": "https://gitlab.com/a/b",
+            "over http": "http://github.com/a/b",
+            "with .git": "https://github.com/a/b.git",
+            "with .GIT": "https://github.com/a/b.GIT",
+            "with a trailing slash": "https://github.com/a/b/",
+            "with a path": "https://github.com/a/b/tree/main",
+            "with a query": "https://github.com/a/b?tab=readme",
+            "with a fragment": "https://github.com/a/b#readme",
+            "with userinfo": "https://user@github.com/a/b",
+            "with a port": "https://github.com:443/a/b",
+            "on www": "https://www.github.com/a/b",
+            "in upper case": "https://GitHub.com/a/b",
+            "with no repository": "https://github.com/a",
+            "with an owner starting with a hyphen": "https://github.com/-a/b",
+            "with an owner ending with a hyphen": "https://github.com/a-/b",
+            "with an owner of 40 characters": f"https://github.com/{'a' * 40}/b",
+            "with an underscore in the owner": "https://github.com/a_b/c",
+            "named .": "https://github.com/a/.",
+            "named ..": "https://github.com/a/..",
+            "with a space": "https://github.com/a/b c",
+            "with a percent escape": "https://github.com/a/b%2Fc",
+            "with a repository of 101 characters": f"https://github.com/a/{'b' * 101}",
+            "with a newline": "https://github.com/a/b\n",
+        }.items()},
         "community with version": broken(lambda ms: ms[0].update(version="1.0.0")),
         "paid community": broken(lambda ms: ms[0].update(price_monthly=9)),
         "verified without sha256": broken(lambda ms: ms[0].update(tier="verified")),
@@ -100,7 +156,7 @@ def selftest() -> int:
             "author": "A", "license": "MIT",
             "data_access": "Its own records.", "network_calls": "None."})),
     }
-    failures = [label for label, doc in cases.items() if not check(doc, schema)]
+    failures = [label for label, doc in cases.items() if not check(doc)]
     if failures:
         print("selftest FAILED, these fixtures passed validation:", ", ".join(failures))
         return 1
@@ -111,9 +167,8 @@ def selftest() -> int:
 def main() -> int:
     if "--selftest" in sys.argv:
         return selftest()
-    schema = json.loads((ROOT / "schema" / "index.schema.json").read_text(encoding="utf-8"))
     index = json.loads((ROOT / "index.json").read_text(encoding="utf-8"))
-    problems = check(index, schema)
+    problems = check(index)
     for p in problems:
         print(f"index.json: {p}")
     if not problems:
