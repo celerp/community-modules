@@ -14,9 +14,11 @@ The outcome is one of:
               declare, so a maintainer reviews it first
   maintainer  opened by a maintainer; reviewed by hand, never merged by a bot
 
-In CI, `check_submission.py <result.json>` reads the pull request from the
-GitHub event, writes the outcome and its comment to <result.json>, and exits 1
-on fail. Every error ends as fail, never as pass.
+In CI, `check_submission.py <result.json>` runs from a checkout of the default
+branch on pull_request_target. It reads the pull request from the GitHub event
+and its files with `git show` (see pull_request_data), writes the outcome and its
+comment to <result.json>, and exits 1 on fail. Every error ends as fail, never
+as pass.
 """
 from __future__ import annotations
 
@@ -415,22 +417,48 @@ def template_lint(gh):
     return mod.lint
 
 
+def pull_request_data(number: int, head_sha: str) -> tuple[str, list[str], dict, dict, set]:
+    """The pull request as GitHub would merge it, read with git and never checked out.
+
+    The workflow checks out the default branch, so the scripts that run are this
+    repository's own. The pull request's merge commit is fetched as objects only;
+    its files are read with `git show`. Returns the base commit, the changed
+    files, the listing files at the base and after the merge, and the base's code
+    owners."""
+    merge = f"refs/listing/{int(number)}"
+    _git("fetch", "--no-tags", "--quiet", "origin", f"+refs/pull/{int(number)}/merge:{merge}")
+    parents = _git("rev-list", "--parents", "-n", "1", merge).split()[1:]
+    if len(parents) != 2 or parents[1] != head_sha:
+        raise _Stop(["GitHub has not prepared a merge of this pull request's latest commit "
+                     "(it may conflict with the catalog). Update the branch and push again."])
+    base_sha = parents[0]
+    on_default = subprocess.run(["git", "merge-base", "--is-ancestor", base_sha, "HEAD"],
+                                cwd=ROOT, capture_output=True).returncode == 0
+    if not on_default:
+        raise _Stop(["This pull request does not target the catalog's default branch."])
+    changed = _git("diff", "--name-only", "--no-renames", base_sha, merge).split()
+    base = {f: _git("show", f"{base_sha}:{f}") for f in LISTING_FILES}
+    head = {f: _git("show", f"{merge}:{f}") for f in LISTING_FILES}
+    owners = code_owners(_git("show", f"{base_sha}:{CODEOWNERS}"))
+    return base_sha, changed, base, head, owners
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         print("usage: check_submission.py <result.json>")
         return 2
     event = json.loads(pathlib.Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
     pr = event["pull_request"]
-    base_sha = _git("rev-parse", "HEAD^1").strip()
+    base_sha = ""
     try:
-        changed = _git("diff", "--name-only", "--no-renames", "HEAD^1", "HEAD").split()
-        base = {f: _git("show", f"HEAD^1:{f}") for f in LISTING_FILES}
-        head = {f: (ROOT / f).read_text(encoding="utf-8") for f in LISTING_FILES}
-        owners = code_owners(_git("show", f"HEAD^1:{CODEOWNERS}"))
+        base_sha, changed, base, head, owners = pull_request_data(pr["number"],
+                                                                   pr["head"]["sha"])
         gh = GitHub()
         result = review(base=base, head=head, changed=changed, author=pr["user"]["login"],
                         association=pr.get("author_association", ""), gh=gh,
                         lint=template_lint(gh), maintainers=owners)
+    except _Stop as exc:
+        result = Result("fail", exc.args[0])
     except Exception as exc:  # fail closed: any error is a failed check
         result = Result("fail", [f"The check could not finish ({_q(type(exc).__name__)}). "
                                  "Push a new commit (an empty one is fine) to run it again."])
@@ -440,7 +468,6 @@ def main() -> int:
         "status": result.status, "comment": text}))
     print(text)
     return 1 if result.status == "fail" else 0
-
 
 if __name__ == "__main__":
     sys.exit(main())

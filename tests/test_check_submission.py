@@ -3,6 +3,9 @@ from __future__ import annotations
 
 import copy
 import json
+import pathlib
+import subprocess
+import tempfile
 import unittest
 from unittest import mock
 
@@ -393,6 +396,68 @@ class SameModuleAsTheApp(Case):
         self.lint = lambda folder: ["x.py\n## Listing check: passed"]
         result = self.assertFails("Template lint: x.py ## Listing check: passed")
         self.assertTrue(all("\n" not in p for p in result.problems), result.problems)
+
+
+def git(cwd, *args: str) -> str:
+    return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.com",
+                           "-c", "init.defaultBranch=main", *args], cwd=cwd, check=True,
+                          capture_output=True, text=True).stdout.strip()
+
+
+class PullRequestReadAsData(unittest.TestCase):
+    """The check runs on the default branch and reads the pull request with git show."""
+
+    def setUp(self):
+        tmp = pathlib.Path(self.enterContext(tempfile.TemporaryDirectory()))
+        up = tmp / "upstream"
+        up.mkdir()
+        git(up, "init", "-q")
+        (up / ".github").mkdir()
+        (up / ".github/CODEOWNERS").write_text("* @keeper\n")
+        (up / "index.json").write_text("base\n")
+        (up / "README.md").write_text("readme\n")
+        git(up, "add", "-A")
+        git(up, "commit", "-qm", "base")
+        self.base = git(up, "rev-parse", "HEAD")
+        git(up, "checkout", "-qb", "listing")
+        (up / "index.json").write_text("head\n")
+        git(up, "commit", "-qam", "listing")
+        self.head = git(up, "rev-parse", "HEAD")
+        git(up, "checkout", "-q", "main")
+        (up / "other.txt").write_text("x\n")
+        git(up, "add", "-A")
+        git(up, "commit", "-qm", "main moves on")
+        self.main = git(up, "rev-parse", "HEAD")
+        git(up, "merge", "-q", "--no-ff", "-m", "merge", "listing")
+        git(up, "update-ref", "refs/pull/7/merge", "HEAD")
+        git(up, "reset", "-q", "--hard", self.main)
+        git(up, "checkout", "-qb", "elsewhere", self.base)
+        git(up, "commit", "-q", "--allow-empty", "-m", "not on main")
+        git(up, "merge", "-q", "--no-ff", "-m", "merge", "listing")
+        git(up, "update-ref", "refs/pull/8/merge", "HEAD")
+        git(up, "checkout", "-q", "-f", "main")
+        self.work = tmp / "work"
+        git(tmp, "clone", "-q", str(up), str(self.work))
+        self.enterContext(mock.patch.object(check_submission, "ROOT", self.work))
+
+    def test_reads_github_merge_without_touching_the_checkout(self):
+        base_sha, changed, base, head, owners = check_submission.pull_request_data(7, self.head)
+        self.assertEqual(base_sha, self.main)
+        self.assertEqual(changed, ["index.json"])
+        self.assertEqual(base["index.json"], "base\n")
+        self.assertEqual(head["index.json"], "head\n")
+        self.assertEqual(owners, {"keeper"})
+        self.assertEqual(git(self.work, "rev-parse", "HEAD"), self.main)
+        self.assertEqual(git(self.work, "status", "--porcelain"), "")
+        self.assertEqual((self.work / "index.json").read_text(), "base\n")
+
+    def test_merge_of_another_head_is_refused(self):
+        with self.assertRaises(check_submission._Stop):
+            check_submission.pull_request_data(7, "f" * 40)
+
+    def test_merge_onto_a_branch_other_than_the_default_is_refused(self):
+        with self.assertRaises(check_submission._Stop):
+            check_submission.pull_request_data(8, self.head)
 
 
 if __name__ == "__main__":

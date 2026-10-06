@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Merge a listing pull request whose check passed; comment on the rest.
 
-Runs from the default branch when the "Validate catalog" workflow finishes for
-a pull request. It never checks out or runs pull request content: it reads the
+Runs from the default branch when the "Listing check" workflow finishes for a
+pull request. It never checks out or runs pull request content: it reads the
 check's result artifact and the pull request through the GitHub API.
 
 Each run, and an hourly scheduled run, handles every open pull request whose
@@ -10,9 +10,10 @@ latest completed check has no outcome yet, not only the one that triggered it.
 The outcome comment records the check run it answers, so a check is handled
 once even when the run that was started for it never ran.
 
-The result artifact is used only when the pull request changes nothing but
-index.json and README.md, so the check that produced it ran this repository's
-own scripts. A pull request is squash-merged only when all of these hold:
+The check runs on pull_request_target from the default branch, so its result
+comes from this repository's own scripts; only a run of that workflow, for
+that trigger, is used. The result is used only when the pull request changes
+nothing but index.json and README.md. A pull request is squash-merged only when all of these hold:
   - the check run for its exact head commit succeeded and reported "pass"
   - the head has not moved and the default branch has not moved since the check
   - it targets the default branch, is open, and was not opened by a maintainer
@@ -34,8 +35,10 @@ from listing import CODEOWNERS, LISTING_FILES, code_owners, is_maintainer
 FLAG_LABEL = "needs-review"
 MARKER = "<!-- listing-check -->"
 BOT_LOGIN = "github-actions[bot]"
-CHECK_WORKFLOW = ".github/workflows/ci.yml"
-CHECK_RUNS = "/actions/workflows/ci.yml/runs?event=pull_request&head_sha={sha}&per_page=100"
+CHECK_WORKFLOW = ".github/workflows/listing-check.yml"
+CHECK_EVENT = "pull_request_target"
+CHECK_RUNS = (f"/actions/workflows/listing-check.yml/runs?event={CHECK_EVENT}"
+              "&head_sha={sha}&per_page=100")
 ARTIFACT = "submission-result"
 MAX_ARTIFACT_BYTES = 1024 * 1024
 MAX_COMMENT_CHARS = 60_000
@@ -76,7 +79,7 @@ def _artifact_result(gh, base: str, run_id: int) -> dict | None:
 def _latest_check(gh, base: str, head: str) -> dict | None:
     """The newest check run for this head, or None while it has not completed."""
     runs = [r for r in gh.get(base + CHECK_RUNS.format(sha=head)).get("workflow_runs", [])
-            if r.get("path") == CHECK_WORKFLOW and r.get("event") == "pull_request"
+            if r.get("path") == CHECK_WORKFLOW and r.get("event") == CHECK_EVENT
             and r.get("head_sha") == head]
     if not runs:
         return None
@@ -158,7 +161,7 @@ def _handle_pr(gh, base: str, default: str, number: int, maintainers: set[str]) 
 def handle(event: dict, repo: str, gh, maintainers: set[str] = frozenset()) -> None:
     """maintainers: the lowercased logins in the default branch's CODEOWNERS."""
     run = event.get("workflow_run")
-    if run is not None and (run.get("event") != "pull_request"
+    if run is not None and (run.get("event") != CHECK_EVENT
                             or run.get("path") != CHECK_WORKFLOW):
         return
     base = f"/repos/{repo}"

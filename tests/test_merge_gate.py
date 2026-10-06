@@ -28,8 +28,8 @@ def artifact(**over) -> bytes:
 
 
 def check_run(**over) -> dict:
-    run = {"id": 77, "run_attempt": 1, "event": "pull_request",
-           "path": ".github/workflows/ci.yml", "head_sha": HEAD, "status": "completed",
+    run = {"id": 77, "run_attempt": 1, "event": "pull_request_target",
+           "path": ".github/workflows/listing-check.yml", "head_sha": HEAD, "status": "completed",
            "conclusion": "success"}
     run.update(over)
     return run
@@ -40,7 +40,8 @@ def event(**over) -> dict:
 
 
 def runs_path(head: str) -> str:
-    return f"{R}/actions/workflows/ci.yml/runs?event=pull_request&head_sha={head}&per_page=100"
+    return (f"{R}/actions/workflows/listing-check.yml/runs?event=pull_request_target"
+            f"&head_sha={head}&per_page=100")
 
 
 def bot_comment(body: str, cid: int = 5) -> dict:
@@ -288,12 +289,30 @@ class ScheduledSweep(Gate):
         self.assertEqual([w[1] for w in self.gh.writes if w[0] == "PUT"], [f"{R}/pulls/12/merge"])
 
 
+class OldTrigger(Gate):
+    """Only the default-branch check counts; a run of the old in-branch check does not."""
+
+    def test_old_trigger_run_is_not_used(self):
+        old = check_run(event="pull_request", path=".github/workflows/ci.yml")
+        self.gh.routes[runs_path(HEAD)] = {"workflow_runs": [old]}
+        self.gh.writes.clear()
+        handle({"workflow_run": old}, REPO, self.gh)
+        self.assertEqual(self.gh.writes, [])
+        handle({}, REPO, self.gh)
+        self.assertEqual(self.gh.writes, [])
+
+
 class Workflow(unittest.TestCase):
     def test_merges_are_serialized_and_the_newest_waiting_run_is_kept(self):
         text = (ROOT / ".github/workflows/listing-merge.yml").read_text()
         block = text.split("concurrency:", 1)[1].split("jobs:", 1)[0]
         self.assertIn("group: listing-merge\n", block)
         self.assertIn("cancel-in-progress: false", block)
+
+    def test_follows_the_listing_check(self):
+        text = (ROOT / ".github/workflows/listing-merge.yml").read_text()
+        self.assertIn("workflows: [Listing check]", text)
+        self.assertIn("github.event.workflow_run.event == 'pull_request_target'", text)
 
     def test_runs_on_a_schedule_as_well(self):
         text = (ROOT / ".github/workflows/listing-merge.yml").read_text()
