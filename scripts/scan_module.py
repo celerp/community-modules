@@ -159,18 +159,18 @@ PATH_JOINERS = ("pathlib.Path", "pathlib.PurePath", "os.path.join")
 PATH_METHODS = ("resolve", "absolute", "joinpath", "with_suffix", "with_name", "as_posix")
 BAD_SEGMENT = re.compile(r"(^|[/\\])\.\.([/\\]|$)|^[/\\]|^[A-Za-z]:|^~")
 # An address without a scheme (//host/...) uses the page's own scheme to reach that
-# host. Browsers skip extra slashes, tab and newline characters, and a user name up to
-# the last @. The host runs to the first space or / \ ? # ' " ` < > ( ), or the end. It
-# is an address when it holds a letter or digit, and a [ or a dot or : followed by
-# something other than . , ; : ! ("//done." and "//TODO: x" are text). A dot is also
-# the 。 ． ｡ browsers read as one, or a percent-encoded dot. A host followed by ( is a
-# call, as in "//console.log(x)", and "a // b" or a single word ("//intranet/") is
-# not an address.
+# host. Browsers skip extra slashes and backslashes, tab and newline characters, and a
+# user name up to the last @. The host runs to the first space or / \ ? # ' " ` < > ( ),
+# or the end. It is an address when it holds a letter or digit, and a [ or a dot or :
+# followed by something other than . , ; : ! ("//done." and "//TODO: x" are text). A
+# dot is also the 。 ． ｡ browsers read as one, or a percent-encoded dot. A host followed
+# by ( is a call, as in "//console.log(x)", and "a // b" or a single word ("//intranet/")
+# is not an address.
 FULL_STOPS = "\u3002\uff0e\uff61"
 DOT = rf"(?:[.:{FULL_STOPS}]|%(?:2e|e3%80%82|ef%bc%8e|ef%bd%a1))"
 USER_CHAR = r"(?:[\t\n\r]|[^\s/\\?#])"
 HOST_CHAR = r"(?:[\t\n\r]|[^\s/\\?#'\"`<>()])"
-NETWORK_PATH = (rf"(?<![\w:/.\\])//+"
+NETWORK_PATH = (rf"(?<![\w:/.\\])//(?:[\t\n\r]*[/\\])*"
                 rf"(?:(?=(?P<user>{USER_CHAR}*@))(?P=user)|(?!{USER_CHAR}*@))"
                 rf"(?={HOST_CHAR}*?\[|(?:(?!{DOT}){HOST_CHAR})*{DOT}{HOST_CHAR}*?"
                 rf"[^\s/\\?#'\"`<>().,;:!{FULL_STOPS}])"
@@ -614,7 +614,7 @@ class _File:
             elif (isinstance(node, ast.Constant) and isinstance(node.value, (str, bytes))
                   and id(node) not in bare_strings):
                 # Script and HTML built in Python reach the browser like a .js file.
-                text = node.value if isinstance(node.value, str) else node.value.decode("latin-1")
+                text = node.value if isinstance(node.value, str) else _bytes_text(node.value)
                 if URL.search(text):
                     self.add("network", node, "a web address in the code")
                 elif JS_NETWORK.search(text):
@@ -821,6 +821,14 @@ def _scan_python(path: str, data: bytes) -> list[Finding]:
     except (UnicodeDecodeError, SyntaxError, ValueError):
         return [Finding("unreadable", path, 1, "Python that does not parse")]
     return _File(path, tree).scan()
+
+
+def _bytes_text(data: bytes) -> str:
+    """Bytes as a page reads them: UTF-8, or one character per byte when not UTF-8."""
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        return data.decode("latin-1")
 
 
 def _scan_script(path: str, data: bytes) -> list[Finding]:
