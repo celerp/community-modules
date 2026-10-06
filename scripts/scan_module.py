@@ -202,14 +202,16 @@ BROWSER_READS = str.maketrans({"\u3002": ".", "\\": "/", "\ua7f1": "s", **{
 # inside the literals that can hold an address. Script strings and template literals:
 # \xHH, \uHHHH, \u{H...}, \n and the other control letters, a backslash before a line
 # break (dropped) and before any other character but a digit, x or u (that character).
-# Style sheet strings and url(), whose name may itself be escaped: \ and 1 to 6 hex
+# Style sheet strings and url(), whose three letters may be escaped too: \ and 1 to 6 hex
 # digits with one optional space after them, or \ before any other character (that
 # character). Markup reads character references (&#46;, &period;) with the standard
-# library.
-QUOTED = r"'(?:[^'\\\n]|\\.)*'|\"(?:[^\"\\\n]|\\.)*\""
-SCRIPT_LITERAL = re.compile(rf"{QUOTED}|`(?:[^`\\]|\\.)*`", re.S)
+# library. A literal without its closing quote or bracket runs as far as it can go,
+# so every literal that starts matches and reading stays linear.
+QUOTED = r"'(?:[^'\\\n]|\\.)*'?|\"(?:[^\"\\\n]|\\.)*\"?"
+SCRIPT_LITERAL = re.compile(rf"{QUOTED}|`(?:[^`\\]|\\.)*`?", re.S)
+STYLE_NAME_CHAR = r"[\w-]|\\(?:[0-9a-fA-F]{1,6}[ \t\n\r\f]?|[^0-9a-fA-F\n\r\f])"
 STYLE_LITERAL = re.compile(
-    rf"{QUOTED}|((?:[\w-]|\\[0-9a-fA-F]{{1,6}}[ \t\n\r\f]?|\\.)+)\((?:[^)\\]|\\.)*\)", re.S)
+    rf"{QUOTED}|(?<![\w\\-])((?:{STYLE_NAME_CHAR}){{3}})\((?:[^)\\]|\\.)*\)?", re.S)
 SCRIPT_ESCAPE = re.compile(r"\\(?:x([0-9a-fA-F]{2})|u([0-9a-fA-F]{4})|u\{([0-9a-fA-F]+)\}"
                            r"|(\r\n|[^xu1-9]))")
 SCRIPT_CONTROLS = {"b": "\b", "f": "\f", "n": "\n", "r": "\r", "t": "\t", "v": "\v", "0": "\0",
