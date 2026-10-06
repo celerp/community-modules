@@ -222,6 +222,26 @@ class Network(unittest.TestCase):
             with self.subTest(src=src):
                 self.assertEqual(kinds(py(src)), found)
 
+    def test_line_break_between_addresses(self):
+        # A list of addresses (as in <a ping>) splits at a tab or newline; the next one
+        # still counts when only the browser's reading of it names a host.
+        for src in ("H = '<a href=\"/\" ping=\"/log\\t//x%2eexample/a\">'\n",
+                    "H = '<a href=\"/\" ping=\"/log\\n//x\\u3002example/a\">'\n",
+                    "H = '<a href=\"/\" ping=\"/a/\\t\\\\\\\\x.example/a\">'\n"):
+            with self.subTest(src=src):
+                self.assertEqual(kinds(py(src)), {"network"})
+        files = py("x = 1\n")
+        files["static/ping.html"] = "<a href=\"/\" ping=\"/log\t//x%2eexample/a\">\n"
+        self.assertEqual(kinds(files), {"network"})
+
+    def test_host_decoded_after_folding(self):
+        # A browser decodes a host, folds it as IDNA does (dropping a soft hyphen or
+        # zero-width character) and decodes it again: %EF%BC%85 is a fullwidth percent sign.
+        for src in ("U = '//x%EF%BC%852eexample/a'\n", "U = '//x%EF%B9%AA2eexample/a'\n",
+                    "U = '//x\\uff05\\u00ad2eexample/a'\n", "U = '//x\\uff052\\u200beexample/a'\n"):
+            with self.subTest(src=src):
+                self.assertEqual(kinds(py(src)), {"network"})
+
     def test_bracketed_host_is_an_ipv6_literal(self):
         # A browser reads a host in brackets only as an IPv6 address.
         for src in ("U = '//[::1]/a'\n", "U = '\\\\\\\\[2001:db8::1]/a'\n",
