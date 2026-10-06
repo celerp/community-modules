@@ -436,9 +436,24 @@ class PullRequestReadAsData(unittest.TestCase):
         git(up, "merge", "-q", "--no-ff", "-m", "merge", "listing")
         git(up, "update-ref", "refs/pull/8/merge", "HEAD")
         git(up, "checkout", "-q", "-f", "main")
+        self.up = up
         self.work = tmp / "work"
         git(tmp, "clone", "-q", str(up), str(self.work))
         self.enterContext(mock.patch.object(check_submission, "ROOT", self.work))
+
+    def merge_onto_main(self, number: int, change) -> str:
+        """Commit `change(upstream)` on a branch from the base, merge it onto upstream main
+        as refs/pull/N/merge, and return the head sha."""
+        git(self.up, "checkout", "-qb", f"pr{number}", self.base)
+        change(self.up)
+        git(self.up, "add", "-A")
+        git(self.up, "commit", "-qm", "listing")
+        head = git(self.up, "rev-parse", "HEAD")
+        git(self.up, "checkout", "-q", "--detach", "main")
+        git(self.up, "merge", "-q", "--no-ff", "-m", "merge", head)
+        git(self.up, "update-ref", f"refs/pull/{number}/merge", "HEAD")
+        git(self.up, "checkout", "-q", "-f", "main")
+        return head
 
     def test_reads_github_merge_without_touching_the_checkout(self):
         base_sha, changed, base, head, owners = check_submission.pull_request_data(7, self.head)
@@ -456,8 +471,18 @@ class PullRequestReadAsData(unittest.TestCase):
             check_submission.pull_request_data(7, "f" * 40)
 
     def test_merge_onto_a_branch_other_than_the_default_is_refused(self):
-        with self.assertRaises(check_submission._Stop):
+        with self.assertRaises(check_submission._Stop) as stop:
             check_submission.pull_request_data(8, self.head)
+        self.assertIn("default branch", " ".join(stop.exception.args[0]))
+
+    def test_a_name_with_a_space_is_one_file(self):
+        def change(up):
+            (up / "index.json").write_text("head\n")
+            (up / "README.md index.json").write_text("anything\n")
+        head = self.merge_onto_main(9, change)
+        _, changed, *_ = check_submission.pull_request_data(9, head)
+        self.assertEqual(sorted(changed), ["README.md index.json", "index.json"])
+        self.assertTrue(check_submission._scope_problems(changed))
 
 
 if __name__ == "__main__":

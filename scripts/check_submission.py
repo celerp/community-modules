@@ -436,7 +436,8 @@ def pull_request_data(number: int, head_sha: str) -> tuple[str, list[str], dict,
                                 cwd=ROOT, capture_output=True).returncode == 0
     if not on_default:
         raise _Stop(["This pull request does not target the catalog's default branch."])
-    changed = _git("diff", "--name-only", "--no-renames", base_sha, merge).split()
+    changed = [f for f in _git("diff", "-z", "--name-only", "--no-renames", base_sha,
+                               merge).split("\0") if f]
     base = {f: _git("show", f"{base_sha}:{f}") for f in LISTING_FILES}
     head = {f: _git("show", f"{merge}:{f}") for f in LISTING_FILES}
     owners = code_owners(_git("show", f"{base_sha}:{CODEOWNERS}"))
