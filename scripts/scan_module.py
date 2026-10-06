@@ -80,6 +80,7 @@ DYNAMIC = (
     "importlib.import_module", "importlib.util", "importlib.machinery", "importlib.reload",
     "importlib.__import__", "importlib.abc", "sys.path", "sys.path_hooks", "sys.meta_path",
     "sys.path_importer_cache", "site", "zipimport", "pkgutil", "__loader__", "__spec__",
+    "inspect", "gc", "sys._current_frames",
     # Celerp code that imports whatever a string names, or registers it to be imported.
     "celerp.modules.slots.resolve_handler", "celerp.modules.slots.register",
     "celerp.modules.loader", "celerp.modules.importer", "celerp.modules.migrations_runner",
@@ -130,6 +131,11 @@ DATA_NAMES = {"license", "licence", "copying", "notice", "readme", "changelog", 
               ".gitignore", ".gitkeep", ".gitattributes"}
 # Manifest keys whose value Celerp imports as a module, and slot keys it imports
 # as "module:function".
+# Attributes that reach another frame's names, a function's globals or every class,
+# and through them anything a module could import.
+INTROSPECTION = {"f_globals", "f_builtins", "f_locals", "f_back", "gi_frame", "cr_frame",
+                 "ag_frame", "tb_frame", "__globals__", "__builtins__", "__subclasses__"}
+MANIFEST = "PLUGIN_MANIFEST"
 ROUTE_KEYS = ("api_routes", "ui_routes")
 HANDLER_KEYS = ("handler", "render")
 SCRIPT_SUFFIXES = {".js", ".mjs", ".cjs", ".html", ".htm", ".svg"}
@@ -255,6 +261,9 @@ class _File:
         _collect(tree, _Scope(None), self.scopes)
         self.tree = tree
         self.findings: list[Finding] = []
+        # Celerp uses the manifest object __init__.py ends up with; only its literal is read.
+        node = manifest_node(tree) if path == "__init__.py" else None
+        self.manifest_literal = {id(t) for t in node.targets} if node is not None else set()
 
     def resolve(self, node: ast.AST, scope: _Scope) -> str | None:
         """Dotted name an expression refers to through imports, or None."""
@@ -348,6 +357,14 @@ class _File:
         read_by_attribute = {id(n.value) for n in ast.walk(self.tree)
                              if isinstance(n, ast.Attribute)}
         for node in ast.walk(self.tree):
+            if ((isinstance(node, ast.Name) and node.id == MANIFEST
+                 and id(node) not in self.manifest_literal)
+                    or (isinstance(node, ast.Attribute) and node.attr == MANIFEST)
+                    or (isinstance(node, ast.Constant) and node.value == MANIFEST)):
+                self.add("dynamic_code", node, f"{MANIFEST} used outside its literal")
+            if ((isinstance(node, ast.Attribute) and node.attr in INTROSPECTION)
+                    or (isinstance(node, ast.Constant) and node.value in INTROSPECTION)):
+                self.add("dynamic_code", node, "reaches other code's names")
             scope = self.scopes.get(id(node))
             if scope is None:
                 continue

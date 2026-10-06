@@ -277,6 +277,37 @@ class ImportMachinery(unittest.TestCase):
     def test_celerp_module_loader(self):
         self.assertEqual(kinds(py("from celerp.modules import loader\n")), {"dynamic_code"})
 
+    def test_frames_and_function_globals(self):
+        for src in ("import inspect\nb = inspect.currentframe().f_builtins\n",
+                    "import gc\nobjs = gc.get_objects()\n",
+                    "g = (lambda: 0).__globals__\n", "c = object.__subclasses__()\n",
+                    "def f(e):\n    return e.__traceback__.tb_frame.f_back\n"):
+            with self.subTest(src=src):
+                self.assertEqual(kinds(py(src)), {"dynamic_code"})
+
+
+class ManifestAsLoaded(unittest.TestCase):
+    """Celerp runs __init__.py and uses the manifest object it ends up with."""
+
+    def test_literal_alone_is_clean(self):
+        self.assertEqual(kinds(module(OWN, OWN_FILES)), set())
+
+    def test_manifest_changed_after_its_literal(self):
+        for extra in ('PLUGIN_MANIFEST["api_routes"] = "celerp.routers.system"\n',
+                      'PLUGIN_MANIFEST.update(api_routes="x")\n',
+                      'PLUGIN_MANIFEST |= {"api_routes": "x"}\n',
+                      'PLUGIN_MANIFEST = {"name": "acme", "api_routes": "x"}\n',
+                      'm = PLUGIN_MANIFEST\nm["api_routes"] = "x"\n'):
+            with self.subTest(extra=extra):
+                files = module(OWN, OWN_FILES)
+                files["__init__.py"] += extra
+                self.assertEqual(kinds(files), {"dynamic_code"})
+
+    def test_manifest_named_in_another_file(self):
+        files = module(OWN, dict(OWN_FILES, **{
+            "acme_w/routes.py": "def f(m):\n    return getattr(m, 'PLUGIN_MANIFEST')\n"}))
+        self.assertEqual(kinds(files), {"dynamic_code"})
+
 
 class SecretSettings(unittest.TestCase):
     def test_more_secret_settings(self):
