@@ -6,10 +6,10 @@ Runs in CI on every pull request. It only reads text - it never runs a module.
 Policy rules on top of the schema:
   - ids are unique and the list is sorted by (tier rank, id)
   - the "celerp-" id prefix is reserved for the official tier
-  - community and verified tiers require a public repo
+  - community and verified tiers require a public repo and its commit
   - community and verified tiers require data_access and network_calls
   - community tier carries no version (the module's own manifest is the version)
-  - verified tier requires verified_commit and sha256
+  - verified tier requires sha256
   - a price requires the verified or official tier (we do not sell unverified code)
 
 Run `validate_index.py --selftest` to exercise every rule against inline fixtures.
@@ -45,15 +45,13 @@ def check(index: dict, schema: dict) -> list[str]:
         if mid.startswith("celerp-") and tier != "official":
             problems.append(f"{mid}: the 'celerp-' prefix is reserved for official modules")
         if tier in ("community", "verified"):
-            for field in ("repo", "data_access", "network_calls"):
+            for field in ("repo", "commit", "data_access", "network_calls"):
                 if not m.get(field):
                     problems.append(f"{mid}: {tier} tier requires {field}")
         if tier == "community" and "version" in m:
             problems.append(f"{mid}: leave out version; a community module's version is the one in its own manifest")
-        if tier == "verified":
-            for field in ("verified_commit", "sha256"):
-                if not m.get(field):
-                    problems.append(f"{mid}: verified tier requires {field}")
+        if tier == "verified" and not m.get("sha256"):
+            problems.append(f"{mid}: verified tier requires sha256")
         if (m.get("price_monthly") or m.get("price_once")) and tier == "community":
             problems.append(f"{mid}: a price requires the verified or official tier")
 

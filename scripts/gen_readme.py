@@ -26,24 +26,38 @@ def render(index: dict) -> str:
         return " ".join(str(v).replace("|", "\\|").split())
 
     for m in index["modules"]:
-        url = m.get("repo") or m.get("homepage") or ""
-        link = f"[{url.split('//', 1)[-1].removeprefix('github.com/').removeprefix('www.')}]({url})" if url else ""
+        link = ""
+        if m.get("repo"):
+            # Link the pinned commit: that is the code the listing check ran on.
+            label = m["repo"].split("//", 1)[-1].removeprefix("github.com/")
+            link = f"[{label} @ {m['commit'][:7]}]({m['repo']}/tree/{m['commit']})"
+        elif m.get("homepage"):
+            url = m["homepage"]
+            link = f"[{url.split('//', 1)[-1].removeprefix('www.')}]({url})"
         cells = (m["name"], TIER_LABEL[m["tier"]], m["description"], link,
                  m["author"], m["license"])
         lines.append("| " + " | ".join(cell(c) for c in cells) + " |")
     return "\n".join(lines)
 
 
+def regenerate(text: str, index: dict) -> str:
+    """README text with the generated block replaced; everything else kept."""
+    if BEGIN not in text or END not in text:
+        raise ValueError("README.md is missing the modules:begin / modules:end markers")
+    head, rest = text.split(BEGIN, 1)
+    _, tail = rest.split(END, 1)
+    return f"{head}{BEGIN}\n{render(index)}\n{END}{tail}"
+
+
 def main() -> int:
     readme = ROOT / "README.md"
     text = readme.read_text(encoding="utf-8")
-    if BEGIN not in text or END not in text:
-        print("README.md is missing the modules:begin / modules:end markers")
-        return 1
-    head, rest = text.split(BEGIN, 1)
-    _, tail = rest.split(END, 1)
     index = json.loads((ROOT / "index.json").read_text(encoding="utf-8"))
-    new = f"{head}{BEGIN}\n{render(index)}\n{END}{tail}"
+    try:
+        new = regenerate(text, index)
+    except ValueError as exc:
+        print(exc)
+        return 1
     if "--check" in sys.argv:
         if new != text:
             print("README table is out of date: run scripts/gen_readme.py and commit")
