@@ -84,13 +84,15 @@ DYNAMIC = (
     "importlib.import_module", "importlib.util", "importlib.machinery", "importlib.reload",
     "importlib.__import__", "importlib.abc", "sys.path", "sys.path_hooks", "sys.meta_path",
     "sys.path_importer_cache", "site", "zipimport", "pkgutil", "__loader__", "__spec__",
-    "inspect", "gc", "sys._current_frames",
+    "importlib.metadata", "inspect", "gc", "sys._current_frames",
     # Celerp code that imports whatever a string names, or registers it to be imported.
     "celerp.modules.slots.resolve_handler", "celerp.modules.slots.register",
     "celerp.modules.loader", "celerp.modules.importer", "celerp.modules.migrations_runner",
 )
-# Parts of those that only read package metadata or test what an object is.
-READ_ONLY = re.compile(r"^importlib\.metadata(\.|$)|^inspect(\.is[a-z]+)?$")
+# Parts of those that only read package metadata or test what an object is. Entry
+# points and the rest of inspect reach or load other code.
+READ_ONLY = re.compile(r"^importlib\.metadata(\.(version|metadata|requires|packages_distributions|"
+                       r"PackageNotFoundError))?$|^inspect(\.is[a-z]+)?$")
 SECRETS = ("os.environ", "os.environb", "os.getenv", "os.getenvb", "os.putenv",
            "os.unsetenv", "getpass", "keyring", "netrc", "dotenv",
            "celerp.gateway.state", "celerp.connectors.relay_token")
@@ -140,9 +142,14 @@ FILE_CALLS = (
 )
 PATH_KWARGS = ("path", "file", "filename", "src", "dst")
 DATA_DIR = "celerp.config.settings.data_dir"
-# Calls that keep a path inside the folder its first argument names.
 # Files held in memory, never on disk.
 IN_MEMORY = ("io.BytesIO", "io.StringIO")
+# Archives, and their methods that read or write a path on disk: the position and
+# keyword of that path. Without one they extract into the working folder.
+ARCHIVES = ("zipfile.ZipFile", "tarfile.open", "tarfile.TarFile")
+ARCHIVE_PATHS = {"extract": (1, "path"), "extractall": (0, "path"), "write": (0, "filename"),
+                 "add": (0, "name")}
+# Calls that keep a path inside the folder its first argument names.
 PATH_KEEPERS = ("pathlib.Path", "pathlib.PurePath", "str", "os.fspath", "os.path.join")
 PATH_JOINERS = ("pathlib.Path", "pathlib.PurePath", "os.path.join")
 PATH_METHODS = ("resolve", "absolute", "joinpath", "with_suffix", "with_name", "as_posix")
@@ -239,8 +246,12 @@ def _names_tests(module: str) -> bool:
 # ── scopes: which names are imports, which are local values ──────────────────
 
 class _Scope:
-    def __init__(self, parent: "_Scope | None"):
+    def __init__(self, parent: "_Scope | None", kind: str = "function"):
         self.parent = parent
+        # "function", "class" or "comprehension"
+        self.kind = kind
+        # a comprehension's first iterable, which runs in the scope around it
+        self.first_iterable: ast.AST | None = None
         # name -> list of ("import", dotted), ("value", expr or None) or
         # ("item", the iterable a loop takes it from)
         self.binds: dict[str, list[tuple[str, object]]] = {}
@@ -265,15 +276,17 @@ class _Scope:
         self.elsewhere[name] = target
 
     def lookup(self, name: str):
+        """Python's lookup: a class body's names are not seen from the scopes in it."""
         scope = self
         while scope is not None:
-            if name in scope.binds:
+            if name in scope.binds and (scope is self or scope.kind != "class"):
                 return scope, scope.binds[name]
             scope = scope.parent
         return None, None
 
 
 _SCOPE_NODES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)
+_COMPREHENSIONS = (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
 
 
 def _bind_targets(target: ast.AST, scope: _Scope, value) -> None:
@@ -291,10 +304,12 @@ def _collect(node: ast.AST, scope: _Scope, scopes: dict[int, _Scope]) -> None:
     scopes[id(node)] = scope
     for child in ast.iter_child_nodes(node):
         inner = scope
-        if isinstance(child, _SCOPE_NODES):
+        if child is scope.first_iterable or _outside(node, child):
+            inner = scope.parent
+        elif isinstance(child, _SCOPE_NODES):
             if not isinstance(child, ast.Lambda):
                 scope.bind(child.name, "value", child)
-            inner = _Scope(scope)
+            inner = _Scope(scope, "class" if isinstance(child, ast.ClassDef) else "function")
             if not isinstance(child, ast.ClassDef):
                 a = child.args
                 for arg in (*a.posonlyargs, *a.args, *a.kwonlyargs, a.vararg, a.kwarg):
@@ -317,8 +332,14 @@ def _collect(node: ast.AST, scope: _Scope, scopes: dict[int, _Scope]) -> None:
             _bind_targets(child.target, scope, child.value)
         elif isinstance(child, ast.AugAssign):
             _bind_targets(child.target, scope, None)
+        elif isinstance(child, _COMPREHENSIONS):
+            inner = _Scope(scope, "comprehension")
+            inner.first_iterable = child.generators[0].iter
         elif isinstance(child, ast.NamedExpr):
-            _bind_targets(child.target, scope, child.value)
+            owner = scope
+            while owner.kind == "comprehension":
+                owner = owner.parent
+            _bind_targets(child.target, owner, child.value)
         elif isinstance(child, (ast.For, ast.AsyncFor, ast.comprehension)):
             if isinstance(child.target, ast.Name):
                 scope.bind(child.target.id, "item", child.iter)
@@ -368,6 +389,21 @@ class _File:
             return f"{base}.{node.args[1].value}" if base else None
         return None
 
+    def candidates(self, node: ast.AST, scope: _Scope) -> list[str]:
+        """Dotted names an expression can refer to: the one it resolves to, or one per
+        import when its name is bound to imports and to other values."""
+        name = self.resolve(node, scope)
+        if name is not None:
+            return [name]
+        suffix = ""
+        while isinstance(node, ast.Attribute):
+            suffix = f".{node.attr}{suffix}"
+            node = node.value
+        if not isinstance(node, ast.Name):
+            return []
+        _, binds = scope.lookup(node.id)
+        return sorted({f"{v}{suffix}" for k, v in binds or () if k == "import" and v})
+
     def attr_names(self, node: ast.AST, scope: _Scope) -> list[str] | None:
         """The attribute names an argument can hold: a literal, or a loop variable
         over literals. None when the name is built while the code runs."""
@@ -382,9 +418,9 @@ class _File:
 
     def got_names(self, node: ast.Call, scope: _Scope) -> list[str]:
         """Dotted names a getattr call can return, when its object resolves."""
-        base = self.resolve(node.args[0], scope) if node.args else None
+        bases = self.candidates(node.args[0], scope) if node.args else []
         names = self.attr_names(node.args[1], scope) if len(node.args) >= 2 else None
-        return [f"{base}.{n}" for n in names] if base and names else []
+        return [f"{b}.{n}" for b in bases for n in names or ()]
 
     def rooted(self, node: ast.AST, scope: _Scope, seen: frozenset = frozenset()) -> bool:
         """True when a path expression stays inside Celerp's data folder or in memory."""
@@ -437,6 +473,18 @@ class _File:
             return base is not None and self.resolve(base, scope) == OWN_API
         return isinstance(node.func, ast.Name) and self.own_client(node.func, scope, seen)
 
+    def archive(self, node: ast.AST, scope: _Scope, seen: frozenset = frozenset()) -> bool:
+        """True when an expression can be a zip or tar archive object."""
+        if isinstance(node, ast.Name):
+            owner, binds = scope.lookup(node.id)
+            if binds is None or (node.id, id(owner)) in seen:
+                return False
+            seen = seen | {(node.id, id(owner))}
+            return any(k == "value" and v is not None and self.archive(v, owner, seen)
+                       for k, v in binds)
+        return isinstance(node, ast.Call) and _matches(self.resolve(node.func, scope) or "",
+                                                       ARCHIVES)
+
     @staticmethod
     def _safe_parts(parts) -> bool:
         """No literal path part that leaves the folder or starts a new root."""
@@ -483,7 +531,8 @@ class _File:
                 self.add("network", node, f"{name} {UNFOLLOWED}")
 
     def _followed(self) -> set[int]:
-        """Uses the scan follows: attribute reads, calls, type annotations and checks."""
+        """Uses the scan follows: attribute reads, calls, type annotations, type checks
+        and truth or identity tests."""
         ids: set[int] = set()
         for n in ast.walk(self.tree):
             if isinstance(n, ast.Attribute):
@@ -493,10 +542,14 @@ class _File:
                 scope = self.scopes.get(id(n), _Scope(None))
                 name = self.resolve(n.func, scope)
                 if name in ("isinstance", "issubclass"):
-                    ids.update(id(a) for a in n.args[1:])
+                    ids.update(id(x) for a in n.args[1:] for x in _type_nodes(a))
                 elif name in ("getattr", "hasattr") and len(n.args) >= 2 and self.attr_names(
                         n.args[1], scope) is not None:
                     ids.add(id(n.args[0]))
+            if isinstance(n, (ast.If, ast.IfExp, ast.While, ast.Assert)):
+                ids.update(id(x) for x in _tested(n.test))
+            elif isinstance(n, (ast.UnaryOp, ast.Compare)):
+                ids.update(id(x) for x in _tested(n))
             annotations = []
             if isinstance(n, ast.arg):
                 annotations.append(n.annotation)
@@ -536,18 +589,13 @@ class _File:
                     if alias.name == "*":
                         self.check_value(node.module, node)
             elif isinstance(node, (ast.Name, ast.Attribute)) and isinstance(node.ctx, ast.Load):
-                name = self.resolve(node, scope)
-                if name in SETTINGS_OBJECTS and id(node) not in read_by_attribute:
-                    self.add("secrets", node, f"{name} used as a whole")
-                if name and (isinstance(node, ast.Attribute) or not _local_import(scope, node)):
-                    self.check_name(name, node)
-                if name and id(node) not in followed:
-                    self.check_value(name, node)
-                if name is None and isinstance(node, ast.Name):
-                    # bound to an import and to something else: either may be used
-                    _, binds = scope.lookup(node.id)
-                    for dotted in {v for k, v in binds if k == "import" and v}:
-                        self.check_value(dotted, node)
+                for name in self.candidates(node, scope):
+                    if name in SETTINGS_OBJECTS and id(node) not in read_by_attribute:
+                        self.add("secrets", node, f"{name} used as a whole")
+                    if isinstance(node, ast.Attribute) or not _local_import(scope, node):
+                        self.check_name(name, node)
+                    if id(node) not in followed:
+                        self.check_value(name, node)
             elif isinstance(node, ast.Attribute):
                 self.check_store(node.value, node, scope)
             elif isinstance(node, ast.Call):
@@ -565,16 +613,25 @@ class _File:
 
     def check_store(self, obj: ast.AST, node: ast.AST, scope: _Scope) -> None:
         """An attribute set or deleted on obj."""
-        name = self.resolve(obj, scope)
-        if name is not None and _reserved(name.split(".")[0]):
-            self.add("dynamic_code", node, f"changes a name in {name}, which other code uses")
-        elif name is None and self.own_client(obj, scope):
+        names = self.candidates(obj, scope)
+        for name in names:
+            if _reserved(name.split(".")[0]):
+                self.add("dynamic_code", node, f"changes a name in {name}, which other code uses")
+        if not names and self.own_client(obj, scope):
             self.add("network", node, "changes Celerp's own API client")
 
     def check_call(self, node: ast.Call, scope: _Scope) -> None:
-        name = self.resolve(node.func, scope)
-        if name is None:
-            return
+        if (isinstance(node.func, ast.Attribute) and node.func.attr in ARCHIVE_PATHS
+                and self.archive(node.func.value, scope)):
+            position, keyword = ARCHIVE_PATHS[node.func.attr]
+            path = next((k.value for k in node.keywords if k.arg == keyword),
+                        node.args[position] if len(node.args) > position else None)
+            if path is None or not self.rooted(path, scope):
+                self.add("files", node, f"an archive's {node.func.attr}")
+        for name in self.candidates(node.func, scope):
+            self._check_call(name, node, scope)
+
+    def _check_call(self, name: str, node: ast.Call, scope: _Scope) -> None:
         if name != "getattr":
             self.check_name(name, node)
         for target in self.got_names(node, scope) if name == "getattr" else ():
@@ -609,6 +666,19 @@ def _str_literals(node) -> list[str] | None:
     return None
 
 
+def _tested(node):
+    """A test's nodes whose value is only checked for truth or identity."""
+    yield node
+    if isinstance(node, ast.BoolOp):
+        for value in node.values:
+            yield from _tested(value)
+    elif isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+        yield from _tested(node.operand)
+    elif isinstance(node, ast.Compare) and all(isinstance(o, (ast.Is, ast.IsNot))
+                                               for o in node.ops):
+        yield from (node.left, *node.comparators)
+
+
 def _type_nodes(node):
     """An annotation's nodes that only name a type. A call, walrus or lambda in it
     runs when the annotation is evaluated, so it is scanned like other code."""
@@ -630,6 +700,14 @@ def _own_returns(func: ast.AST):
             yield child
         elif not isinstance(child, _SCOPE_NODES):
             yield from _own_returns(child)
+
+
+def _outside(node: ast.AST, child: ast.AST) -> bool:
+    """A part of a function or class that runs in the scope around it: decorators,
+    defaults, annotations and bases."""
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        return not any(child is c for c in node.body)
+    return isinstance(node, ast.Lambda) and child is not node.body
 
 
 def _local_import(scope: _Scope, node: ast.AST) -> bool:
