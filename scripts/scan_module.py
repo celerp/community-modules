@@ -19,20 +19,21 @@ address counts with a scheme (`https://host/...`). One without a scheme
 or colon with more of the host after it; a single word such as `//name/` does
 not. Text is read the way a browser reads an address. Escapes are decoded in the
 language the text is written in (character references such as `&#46;` in markup,
-`\\x2e` in script, `\\2e` in style sheets, all three in strings built in
-Python), then tab and newline characters are dropped (and, separately, read as a
-space between two addresses), backslashes read as slashes, look-alike characters
-folded, characters IDNA ignores dropped and percent-encoding decoded as far as a
-browser decodes it, before the text is matched. Letters a browser folds that are
-newer than the Unicode data of Python 3.12, which the checks run on, are listed
-by hand, so letters added in a later Unicode version are not folded. An address
-or call built while the code runs is not followed. Where the scan cannot follow
-a name (a module such as `os` stored or passed as a value, an attribute name
-built at runtime) it reports that instead, as it does code that changes names in
-modules Python, Celerp or its libraries provide. It is a review aid, not a
-security boundary: it reports the ordinary ways of doing these things, not every
-way Python can reach a name, and a clean scan is not proof of what the code
-does. Test files are left out unless the module's own code imports them.
+`\\x2e` in script strings, `\\2e` in style sheet strings and `url()`, all three
+in strings built in Python), then tab and newline characters are dropped (and,
+separately, read as a space between two addresses), backslashes read as slashes,
+look-alike characters folded, characters IDNA ignores dropped and
+percent-encoding decoded as far as a browser decodes it, before the text is
+matched. Letters a browser folds that are newer than the Unicode data of Python
+3.12, which the checks run on, are listed by hand, so letters added in a later
+Unicode version are not folded. An address or call built while the code runs is
+not followed. Where the scan cannot follow a name (a module such as `os` stored
+or passed as a value, an attribute name built at runtime) it reports that
+instead, as it does code that changes names in modules Python, Celerp or its
+libraries provide. It is a review aid, not a security boundary: it reports the
+ordinary ways of doing these things, not every way Python can reach a name, and
+a clean scan is not proof of what the code does. Test files are left out unless
+the module's own code imports them.
 """
 from __future__ import annotations
 
@@ -197,12 +198,18 @@ IGNORED = re.compile("[\u00ad\u034f\u115f\u1160\u17b4\u17b5\u180b-\u180f\u200b\u
                      "\U0001d173-\U0001d17a\U000e0100-\U000e01ef]")
 BROWSER_READS = str.maketrans({"\u3002": ".", "\\": "/", "\ua7f1": "s", **{
     chr(0x1ccd6 + i): c for i, c in enumerate("abcdefghijklmnopqrstuvwxyz0123456789")}})
-# Escapes a language decodes before a browser reads an address written in it. Script
-# string escapes: \xHH, \uHHHH, \u{H...}, \n and the other control letters, a backslash
-# before a line break (dropped) and before any other character but a digit, x or u (that
-# character). Style sheet escapes: \ and 1 to 6 hex digits with one optional space after
-# them, or \ before any other character (that character). Markup reads character
-# references (&#46;, &period;) with the standard library.
+# Escapes a language decodes before a browser reads an address written in it, read only
+# inside the literals that can hold an address. Script strings and template literals:
+# \xHH, \uHHHH, \u{H...}, \n and the other control letters, a backslash before a line
+# break (dropped) and before any other character but a digit, x or u (that character).
+# Style sheet strings and url(), whose name may itself be escaped: \ and 1 to 6 hex
+# digits with one optional space after them, or \ before any other character (that
+# character). Markup reads character references (&#46;, &period;) with the standard
+# library.
+QUOTED = r"'(?:[^'\\\n]|\\.)*'|\"(?:[^\"\\\n]|\\.)*\""
+SCRIPT_LITERAL = re.compile(rf"{QUOTED}|`(?:[^`\\]|\\.)*`", re.S)
+STYLE_LITERAL = re.compile(
+    rf"{QUOTED}|((?:[\w-]|\\[0-9a-fA-F]{{1,6}}[ \t\n\r\f]?|\\.)+)\((?:[^)\\]|\\.)*\)", re.S)
 SCRIPT_ESCAPE = re.compile(r"\\(?:x([0-9a-fA-F]{2})|u([0-9a-fA-F]{4})|u\{([0-9a-fA-F]+)\}"
                            r"|(\r\n|[^xu1-9]))")
 SCRIPT_CONTROLS = {"b": "\b", "f": "\f", "n": "\n", "r": "\r", "t": "\t", "v": "\v", "0": "\0",
@@ -876,7 +883,7 @@ def _readings(text: str, languages: tuple) -> tuple[str, ...]:
 
 
 def _script_text(text: str) -> str:
-    return SCRIPT_ESCAPE.sub(_script_char, text)
+    return SCRIPT_LITERAL.sub(lambda literal: SCRIPT_ESCAPE.sub(_script_char, literal[0]), text)
 
 
 def _script_char(escape: re.Match[str]) -> str:
@@ -886,7 +893,14 @@ def _script_char(escape: re.Match[str]) -> str:
 
 
 def _style_text(text: str) -> str:
-    return STYLE_ESCAPE.sub(_style_char, text)
+    return STYLE_LITERAL.sub(_style_literal, text)
+
+
+def _style_literal(literal: re.Match[str]) -> str:
+    """A style string, or a function whose name reads "url", with its escapes read."""
+    if literal[1] is not None and STYLE_ESCAPE.sub(_style_char, literal[1]).lower() != "url":
+        return literal[0]
+    return STYLE_ESCAPE.sub(_style_char, literal[0])
 
 
 def _style_char(escape: re.Match[str]) -> str:
