@@ -76,15 +76,25 @@ def _artifact_result(gh, base: str, run_id: int) -> dict | None:
     return result if isinstance(result, dict) else None
 
 
-def _latest_check(gh, base: str, head: str) -> dict | None:
-    """The newest check run for this head, or None while it has not completed."""
-    runs = [r for r in gh.get(base + CHECK_RUNS.format(sha=head)).get("workflow_runs", [])
-            if r.get("path") == CHECK_WORKFLOW and r.get("event") == CHECK_EVENT
-            and r.get("head_sha") == head]
-    if not runs:
-        return None
-    latest = max(runs, key=lambda r: r["id"])
-    return latest if latest.get("status") == "completed" else None
+def _latest_check(gh, base: str, head: str, number: int,
+                  answered: str) -> tuple[dict, dict | None] | None:
+    """This pull request's newest check of its head and the check's result, or None
+    while a check of the head is still running or that check is already answered.
+
+    Another pull request can have the same head commit, and its checks are runs for
+    the same head. A run is this pull request's when its result names this pull
+    request; runs with another pull request's result, or none, are passed over. When
+    no run's result names it, the newest run is answered as not finished."""
+    runs = sorted((r for r in gh.get(base + CHECK_RUNS.format(sha=head)).get("workflow_runs", [])
+                   if r.get("path") == CHECK_WORKFLOW and r.get("event") == CHECK_EVENT
+                   and r.get("head_sha") == head), key=lambda r: r["id"], reverse=True)
+    for run in runs:
+        if run.get("status") != "completed" or _run_marker(run) in answered:
+            return None
+        result = _artifact_result(gh, base, run["id"])
+        if result is not None and result.get("pr") == number:
+            return run, result
+    return (runs[0], None) if runs else None
 
 
 def _run_marker(run: dict) -> str:
@@ -104,12 +114,11 @@ def _handle_pr(gh, base: str, default: str, number: int, maintainers: set[str]) 
             or is_maintainer(pr["user"]["login"], pr.get("author_association", ""), maintainers)):
         return
     head = pr["head"]["sha"]
-    run = _latest_check(gh, base, head)
-    if run is None:
-        return
     existing = _gate_comment(gh, base, number)
-    if existing and _run_marker(run) in (existing.get("body") or ""):
+    check = _latest_check(gh, base, head, number, (existing or {}).get("body") or "")
+    if check is None:
         return
+    run, result = check
 
     def say(text: str) -> None:
         """Write the outcome into this pull request's one gate comment."""
@@ -128,7 +137,6 @@ def _handle_pr(gh, base: str, default: str, number: int, maintainers: set[str]) 
     if not names <= set(LISTING_FILES) or "index.json" not in names:
         say(OTHER_FILES)
         return
-    result = _artifact_result(gh, base, run["id"])
     if (result is None or result.get("pr") != number or result.get("head_sha") != head
             or result.get("status") not in STATUSES
             or not isinstance(result.get("comment"), str)

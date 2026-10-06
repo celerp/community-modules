@@ -274,6 +274,31 @@ class EveryCheckIsHandled(Gate):
             check_run(id=79, path=".github/workflows/other.yml")]}
         self.assertEqual(self.run_gate(), [])
 
+    def other_pull_requests_check(self, run_id: int, **result) -> None:
+        """A newer check of the same commit, run for another pull request with that head."""
+        self.gh.routes[runs_path(HEAD)] = {"workflow_runs": [check_run(),
+                                                             check_run(id=run_id)]}
+        url = f"https://api.github.com/artifact/{run_id}/zip"
+        self.gh.routes[f"{R}/actions/runs/{run_id}/artifacts"] = {"artifacts": [
+            {"name": "submission-result", "archive_download_url": url, "expired": False}
+        ] if result else []}
+        self.gh.downloads[url] = artifact(**result)
+
+    def test_newer_check_of_the_same_commit_in_another_pull_request_does_not_block(self):
+        self.other_pull_requests_check(99, pr=13, status="fail")
+        self.assertEqual(len(self.merges()), 1)
+
+    def test_newer_check_without_a_result_does_not_block(self):
+        # A pull request into another branch leaves a skipped run with no result.
+        self.other_pull_requests_check(99)
+        self.assertEqual(len(self.merges()), 1)
+
+    def test_answered_check_stays_answered_after_another_pull_requests_check(self):
+        self.gh.routes[f"{R}/issues/12/comments?per_page=100"] = [
+            bot_comment(f"{MARKER}\n<!-- listing-run: 77.1 -->\nmerged")]
+        self.other_pull_requests_check(99, pr=13, status="fail")
+        self.assertEqual(self.run_gate(), [])
+
     def test_error_on_one_pull_request_does_not_stop_the_others(self):
         self.add_pr(13, "5" * 40, 76, conclusion="failure")
         self.gh.routes[f"{R}/pulls/12"] = ApiError("GET pulls/12: HTTP 502")
