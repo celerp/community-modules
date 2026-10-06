@@ -183,5 +183,165 @@ class FindingDetail(unittest.TestCase):
         self.assertEqual((f.kind, f.path, f.line), ("network", "pkg/a.py", 3))
 
 
+def module(manifest: dict, files: dict[str, str]) -> dict[str, str]:
+    """A module folder: the manifest at its root plus the given files."""
+    return {"__init__.py": f"PLUGIN_MANIFEST = {manifest!r}\n", **files}
+
+
+OWN = {"name": "acme", "api_routes": "acme_w.routes", "ui_routes": "acme_w.ui_routes",
+       "migrations": "acme_w.migrations",
+       "slots": {"search_provider": {"handler": "acme_w.search:find"},
+                 "doc_detail_actions": [{"render": "acme_w.ui_routes:button"}]}}
+OWN_FILES = {"acme_w/__init__.py": "", "acme_w/routes.py": "x = 1\n",
+             "acme_w/ui_routes.py": "x = 1\n", "acme_w/search.py": "x = 1\n",
+             "acme_w/migrations/__init__.py": "", "acme_w/migrations/m001.py": "x = 1\n"}
+
+
+class ManifestReferences(unittest.TestCase):
+    """Celerp imports the code the manifest names; it must be the module's own."""
+
+    def test_own_references_are_fine(self):
+        self.assertEqual(kinds(module(OWN, OWN_FILES)), set())
+
+    def test_route_module_outside_the_folder(self):
+        self.assertEqual(kinds(module({**OWN, "api_routes": "celerp.routers.system"},
+                                      OWN_FILES)), {"dynamic_code"})
+
+    def test_slot_handler_outside_the_folder(self):
+        slots = {"search_provider": {"handler": "celerp.ai.service:run"}}
+        self.assertEqual(kinds(module({**OWN, "slots": slots}, OWN_FILES)),
+                         {"dynamic_code"})
+
+    def test_slot_render_outside_the_folder(self):
+        slots = {"doc_detail_actions": [{"render": "ui.routes.documents:page"}]}
+        self.assertEqual(kinds(module({**OWN, "slots": slots}, OWN_FILES)),
+                         {"dynamic_code"})
+
+    def test_migrations_folder_outside_the_module(self):
+        self.assertEqual(kinds(module({**OWN, "migrations": "/srv/other"}, OWN_FILES)),
+                         {"dynamic_code"})
+
+    def test_own_package_named_like_the_standard_library(self):
+        manifest = {"name": "acme", "api_routes": "json.routes"}
+        files = {"json/__init__.py": "", "json/routes.py": "x = 1\n"}
+        self.assertEqual(kinds(module(manifest, files)), {"dynamic_code"})
+
+    def test_top_level_module_named_like_an_installed_package(self):
+        files = {**OWN_FILES, "requests.py": "x = 1\n"}
+        self.assertEqual(kinds(module(OWN, files)), {"dynamic_code"})
+
+    def test_locale_file_outside_the_folder(self):
+        manifest = {**OWN, "locales": {"th": {"file": "../../other/th.json"}}}
+        self.assertEqual(kinds(module(manifest, OWN_FILES)), {"files"})
+
+    def test_locale_file_in_the_folder(self):
+        manifest = {**OWN, "locales": {"th": {"file": "locales/th.json"}}}
+        files = {**OWN_FILES, "locales/th.json": "{}"}
+        self.assertEqual(kinds(module(manifest, files)), set())
+
+
+class ImportableFiles(unittest.TestCase):
+    def test_compiled_file_named_like_a_license(self):
+        files = py("x = 1\n")
+        files["license.pyc"] = b"\x00"
+        self.assertEqual(kinds(files), {"unreadable"})
+
+    def test_extension_named_like_a_notice(self):
+        files = py("x = 1\n")
+        files["notice.so"] = b"\x7fELF"
+        self.assertEqual(kinds(files), {"unreadable"})
+
+
+class ImportMachinery(unittest.TestCase):
+    def test_sys_path(self):
+        self.assertEqual(kinds(py("import sys\nsys.path.insert(0, d)\n")), {"dynamic_code"})
+
+    def test_meta_path(self):
+        self.assertEqual(kinds(py("import sys\nsys.meta_path.append(f)\n")),
+                         {"dynamic_code"})
+
+    def test_site_zipimport_pkgutil(self):
+        for src in ("import site\n", "import zipimport\n", "import pkgutil\n"):
+            with self.subTest(src=src):
+                self.assertEqual(kinds(py(src)), {"dynamic_code"})
+
+    def test_celerp_handler_resolver(self):
+        self.assertEqual(kinds(py(
+            "from celerp.modules.slots import resolve_handler\nresolve_handler(p)\n")),
+            {"dynamic_code"})
+
+    def test_celerp_slot_registration(self):
+        self.assertEqual(kinds(py("from celerp.modules import slots\nslots.register(a, b)\n")),
+                         {"dynamic_code"})
+
+    def test_celerp_module_loader(self):
+        self.assertEqual(kinds(py("from celerp.modules import loader\n")), {"dynamic_code"})
+
+
+class SecretSettings(unittest.TestCase):
+    def test_more_secret_settings(self):
+        for attr in ("backup_encryption_key", "deployment_nonce", "activation_verifier",
+                     "redis_url", "smtp_user"):
+            with self.subTest(attr=attr):
+                self.assertEqual(kinds(py(
+                    f"from celerp.config import settings\nk = settings.{attr}\n")),
+                    {"secrets"})
+
+    def test_settings_object_under_another_name(self):
+        self.assertEqual(kinds(py(
+            "from celerp.config import settings\ns = settings\nk = s.jwt_secret\n")),
+            {"secrets"})
+
+    def test_settings_dumped_whole(self):
+        self.assertEqual(kinds(py(
+            "from celerp.config import settings\nd = settings.model_dump()\n")),
+            {"secrets"})
+
+    def test_ui_settings_object(self):
+        self.assertEqual(kinds(py("from ui.config import _settings\nprint(_settings)\n")),
+                         {"secrets"})
+
+    def test_config_file_reader(self):
+        self.assertEqual(kinds(py("from celerp.config import read_config\nc = read_config()\n")),
+                         {"secrets"})
+
+    def test_fresh_settings_instance(self):
+        self.assertEqual(kinds(py("from celerp.config import Settings\ns = Settings()\n")),
+                         {"secrets"})
+
+    def test_standard_module_reached_through_a_core_module(self):
+        self.assertEqual(kinds(py("from ui.config import os\nk = os.environ\n")),
+                         {"secrets"})
+
+    def test_plain_settings_are_fine(self):
+        self.assertEqual(kinds(py(
+            "from celerp.config import settings\n"
+            "from ui.config import API_BASE, COOKIE_NAME, get_role\n"
+            "n = settings.log_level\n")), set())
+
+
+class CoreWrappers(unittest.TestCase):
+    """Celerp code that makes the call for the module counts as the module's call."""
+
+    def test_email_service(self):
+        self.assertEqual(kinds(py("from celerp.services.email import send\n")), {"network"})
+
+    def test_connectors_package(self):
+        self.assertEqual(kinds(py("import celerp.connectors.shopify\n")), {"network"})
+
+    def test_backup_service(self):
+        self.assertEqual(kinds(py("from celerp.services import backup\n")), {"process"})
+
+    def test_gateway_state(self):
+        self.assertIn("secrets", kinds(py("from celerp.gateway.state import get\n")))
+
+    def test_ordinary_core_services_are_fine(self):
+        self.assertEqual(kinds(py(
+            "from celerp.services.auth import get_current_user\n"
+            "from celerp.services import attachments, permissions\n"
+            "from ui.components.shell import page\nfrom ui.api_client import client\n")),
+            set())
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -120,7 +120,9 @@ must:
 The check also scans the module's code for network calls, starting other
 programs, running code built or loaded at runtime, reading environment
 variables, credentials or Celerp's secret settings, and file access outside
-Celerp's data folder (`settings.data_dir`). Network calls your `network_calls`
+Celerp's data folder (`settings.data_dir`). It also checks that the routes, slot
+handlers, migrations and locale files your manifest names are your module's own
+package and files. Network calls your `network_calls`
 declares are fine. Anything else it finds is **flagged**: the pull request gets
 the `needs-review` label and waits for the maintainer.
 

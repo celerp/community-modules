@@ -6,9 +6,9 @@ a pull request. It never checks out or runs pull request content: it reads the
 check's result artifact and the pull request through the GitHub API.
 
 Each run, and an hourly scheduled run, handles every open pull request whose
-latest completed check has no outcome yet, not only the one that triggered it. The outcome comment records
-the check run it answers, so a check is handled once even when the run that
-was started for it never ran.
+latest completed check has no outcome yet, not only the one that triggered it.
+The outcome comment records the check run it answers, so a check is handled
+once even when the run that was started for it never ran.
 
 The result artifact is used only when the pull request changes nothing but
 index.json and README.md, so the check that produced it ran this repository's

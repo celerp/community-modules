@@ -38,7 +38,7 @@ from dataclasses import dataclass, field
 from gen_readme import regenerate
 from github_api import ApiError, GitHub, NotFound, TooLarge
 from listing import CODEOWNERS, LISTING_FILES, code_owners, is_maintainer
-from scan_module import KINDS, scan_folder
+from scan_module import KINDS, manifest_node, read_manifest, scan_folder
 from validate_index import check as validate
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -219,24 +219,7 @@ def _is_manifest(data: bytes) -> bool:
         tree = ast.parse(data.decode("utf-8", errors="replace"))
     except (SyntaxError, ValueError):
         return False
-    return _manifest_node(tree) is not None
-
-
-def _manifest_node(tree: ast.AST):
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Assign) and any(
-                isinstance(t, ast.Name) and t.id == "PLUGIN_MANIFEST" for t in node.targets):
-            return node
-    return None
-
-
-def _manifest(data: bytes) -> dict | None:
-    node = _manifest_node(ast.parse(data.decode("utf-8", errors="replace")))
-    try:
-        value = ast.literal_eval(node.value)
-    except (ValueError, TypeError, SyntaxError, MemoryError, RecursionError):
-        return None
-    return value if isinstance(value, dict) else None
+    return manifest_node(tree) is not None
 
 
 def _module_files(data: bytes, mid: str) -> dict[str, bytes]:
@@ -284,7 +267,7 @@ def _module_files(data: bytes, mid: str) -> dict[str, bytes]:
 
 
 def _module_problems(entry: dict, files: dict[str, bytes], lint) -> tuple[dict, list[str]]:
-    manifest = _manifest(files["__init__.py"])
+    manifest = read_manifest(files["__init__.py"])
     if manifest is None:
         raise _Stop(["PLUGIN_MANIFEST in __init__.py must be a dict of plain values."])
     problems = []

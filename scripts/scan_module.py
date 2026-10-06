@@ -6,6 +6,10 @@ network calls, starting other programs, running code built at runtime, reading
 environment secrets or credentials, and file access outside Celerp's data
 folder. Files it cannot read as source or plain data are reported as well.
 
+The manifest is read the same way: the code Celerp imports from it (routes, slot
+handlers, migrations) must be the module's own package, and the files it reads
+(locales) must be in the folder.
+
 Python is read with `ast`, names are resolved through the file's own imports,
 so `import os as o; o.system(...)` is seen as `os.system`. Test files are left
 out unless the module's own code imports them.
@@ -13,7 +17,9 @@ out unless the module's own code imports them.
 from __future__ import annotations
 
 import ast
+import posixpath
 import re
+import sys
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 
@@ -42,6 +48,12 @@ NETWORK = (
     "imaplib", "telnetlib", "nntplib", "xmlrpc", "socketserver", "paramiko", "grpc",
     "pycurl", "dns", "boto3", "botocore", "webbrowser", "asyncio.open_connection",
     "asyncio.start_server", "asyncio.open_unix_connection", "asyncio.start_unix_server",
+    # Celerp code that makes the call itself when a module calls it.
+    "celerp.ai.llm", "celerp.ai.tools", "celerp.connectors", "celerp.gateway",
+    "celerp.services.email", "celerp.services.outbound_url", "celerp.services.relay_share",
+    "celerp.services.star_cta", "celerp.services.supporter_badge", "celerp.services.update",
+    "celerp.services.backup_repo", "celerp.modules.license", "celerp.entitlement_preflight",
+    "ui.marketplace_catalog",
 )
 HTTPX_CALLS = {f"httpx.{n}" for n in (
     "Client", "AsyncClient", "get", "post", "put", "patch", "delete", "head", "options",
@@ -56,6 +68,9 @@ PROCESS = (
     *(f"os.spawn{s}" for s in ("l", "le", "lp", "lpe", "v", "ve", "vp", "vpe")),
     "asyncio.create_subprocess_exec", "asyncio.create_subprocess_shell",
     "concurrent.futures.ProcessPoolExecutor",
+    # Celerp code that starts other programs itself when a module calls it.
+    "celerp.cli", "celerp.embedded_pg", "celerp.services.backup", "celerp.services.backup_export",
+    "celerp.services.backup_import", "celerp.services.update", "celerp.routers.system",
 )
 DYNAMIC = (
     "eval", "exec", "compile", "__import__", "globals", "locals", "vars", "breakpoint",
@@ -63,14 +78,30 @@ DYNAMIC = (
     "marshal", "shelve", "dill", "code", "codeop", "types.FunctionType", "types.CodeType",
     "sys.modules", "sys._getframe", "yaml.load", "yaml.unsafe_load",
     "importlib.import_module", "importlib.util", "importlib.machinery", "importlib.reload",
-    "importlib.__import__",
+    "importlib.__import__", "importlib.abc", "sys.path", "sys.path_hooks", "sys.meta_path",
+    "sys.path_importer_cache", "site", "zipimport", "pkgutil", "__loader__", "__spec__",
+    # Celerp code that imports whatever a string names, or registers it to be imported.
+    "celerp.modules.slots.resolve_handler", "celerp.modules.slots.register",
+    "celerp.modules.loader", "celerp.modules.importer", "celerp.modules.migrations_runner",
 )
 SECRETS = ("os.environ", "os.environb", "os.getenv", "os.getenvb", "os.putenv",
-           "os.unsetenv", "getpass", "keyring", "netrc", "dotenv")
+           "os.unsetenv", "getpass", "keyring", "netrc", "dotenv",
+           "celerp.gateway.state", "celerp.connectors.relay_token")
 SECRET_SETTING = re.compile(
-    r"secret|password|passwd|token|api_key|private_key|credential|dsn|database_url|db_url|jwt",
-    re.I)
-CONFIG_MODULES = ("celerp.config", "ui.config")
+    r"secret|password|passwd|token|key|credential|dsn|database_url|db_url|redis_url|jwt|"
+    r"nonce|verifier|smtp_user|instance_id", re.I)
+# Celerp's settings objects. A module may read a plain setting by name; the object
+# itself, its secret settings and its dump methods count as reading secrets.
+SETTINGS_OBJECTS = ("celerp.config.settings", "ui.config._settings")
+SETTINGS_METHODS = re.compile(
+    r"^(_|model_)|^(dict|json|copy|schema|schema_json|construct|parse_obj|parse_raw|"
+    r"parse_file|from_orm|validate|fields)$")
+# Everything else in celerp.config reads or writes Celerp's configuration file.
+CONFIG_FILE = "celerp.config"
+UI_CONFIG = "ui.config"
+# Top-level packages Celerp itself provides; a module's code reached through them
+# is checked as the standard module it names (ui.config.os.environ is os.environ).
+CORE_PACKAGES = ("celerp", "ui")
 FILE_CALLS = (
     "open", "io.open", "os.open", "os.remove", "os.unlink", "os.rename", "os.renames",
     "os.replace", "os.rmdir", "os.removedirs", "os.mkdir", "os.makedirs", "os.listdir",
@@ -97,6 +128,10 @@ DATA_SUFFIXES = {
 }
 DATA_NAMES = {"license", "licence", "copying", "notice", "readme", "changelog", "authors",
               ".gitignore", ".gitkeep", ".gitattributes"}
+# Manifest keys whose value Celerp imports as a module, and slot keys it imports
+# as "module:function".
+ROUTE_KEYS = ("api_routes", "ui_routes")
+HANDLER_KEYS = ("handler", "render")
 SCRIPT_SUFFIXES = {".js", ".mjs", ".cjs", ".html", ".htm", ".svg"}
 JS_NETWORK = re.compile(r"\bfetch\s*\(|XMLHttpRequest|\bWebSocket\b|\bEventSource\b|"
                         r"sendBeacon|\b(?:https?|wss?)://(?!www\.w3\.org/)")
@@ -110,6 +145,24 @@ def _matches(name: str, prefixes) -> bool:
 def _is_test(path: PurePosixPath) -> bool:
     return (path.name == "conftest.py" or path.name.startswith("test_")
             or any(part in ("tests", "test") for part in path.parts[:-1]))
+
+
+def _reserved(top: str) -> bool:
+    """A top-level name Python or Celerp already provides."""
+    return top in sys.stdlib_module_names or _matches(top, CORE_PACKAGES) \
+        or top.startswith("celerp")
+
+
+def _secret_config(name: str) -> bool:
+    for obj in SETTINGS_OBJECTS:
+        if name == obj:
+            return False  # judged where it is used, see _File.scan
+        if name.startswith(obj + "."):
+            attr = name[len(obj) + 1:].split(".")[0]
+            return bool(SECRET_SETTING.search(attr) or SETTINGS_METHODS.search(attr))
+    if name.startswith(CONFIG_FILE + "."):
+        return True
+    return name.startswith(UI_CONFIG + ".") and bool(SECRET_SETTING.search(name.split(".")[-1]))
 
 
 def _names_tests(module: str) -> bool:
@@ -272,19 +325,28 @@ class _File:
         self.findings.append(Finding(kind, self.path, getattr(node, "lineno", 1), detail))
 
     def check_name(self, name: str, node: ast.AST) -> None:
-        if _matches(name, NETWORK):
-            self.add("network", node, name)
-        if _matches(name, PROCESS):
-            self.add("process", node, name)
-        if _matches(name, DYNAMIC) and not name.startswith("importlib.metadata"):
-            self.add("dynamic_code", node, name)
-        if _matches(name, SECRETS) or (
-                _matches(name, CONFIG_MODULES) and SECRET_SETTING.search(name.split(".")[-1])):
+        if _secret_config(name):
             self.add("secrets", node, name)
+        parts = name.split(".")
+        names = [name]
+        if _matches(name, CORE_PACKAGES):
+            names += [".".join(parts[i:]) for i in range(1, len(parts))
+                      if parts[i] in sys.stdlib_module_names]
+        for n in names:
+            if _matches(n, NETWORK):
+                self.add("network", node, name)
+            if _matches(n, PROCESS):
+                self.add("process", node, name)
+            if _matches(n, DYNAMIC) and not n.startswith("importlib.metadata"):
+                self.add("dynamic_code", node, name)
+            if _matches(n, SECRETS):
+                self.add("secrets", node, name)
 
     def scan(self) -> list[Finding]:
         bare_strings = {id(n.value) for n in ast.walk(self.tree)
                         if isinstance(n, ast.Expr) and isinstance(n.value, ast.Constant)}
+        read_by_attribute = {id(n.value) for n in ast.walk(self.tree)
+                             if isinstance(n, ast.Attribute)}
         for node in ast.walk(self.tree):
             scope = self.scopes.get(id(node))
             if scope is None:
@@ -298,6 +360,8 @@ class _File:
                                     else f"{node.module}.{alias.name}", node)
             elif isinstance(node, (ast.Name, ast.Attribute)) and isinstance(node.ctx, ast.Load):
                 name = self.resolve(node, scope)
+                if name in SETTINGS_OBJECTS and id(node) not in read_by_attribute:
+                    self.add("secrets", node, f"{name} used as a whole")
                 if name and (isinstance(node, ast.Attribute) or not _local_import(scope, node)):
                     self.check_name(name, node)
             elif isinstance(node, ast.Call):
@@ -346,6 +410,97 @@ def _local_import(scope: _Scope, node: ast.AST) -> bool:
     return binds is not None
 
 
+def manifest_node(tree: ast.AST):
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and any(
+                isinstance(t, ast.Name) and t.id == "PLUGIN_MANIFEST" for t in node.targets):
+            return node
+    return None
+
+
+def read_manifest(data: bytes) -> dict | None:
+    """PLUGIN_MANIFEST as plain values, decoded the way Celerp's importer decodes it."""
+    try:
+        node = manifest_node(ast.parse(data.decode("utf-8", errors="replace")))
+        value = ast.literal_eval(node.value) if node is not None else None
+    except (ValueError, TypeError, SyntaxError, MemoryError, RecursionError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _handlers(value):
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key in HANDLER_KEYS and isinstance(item, str):
+                yield key, item
+            else:
+                yield from _handlers(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _handlers(item)
+
+
+def _own_code(dotted: str, files: dict[str, bytes], name: object, package: bool) -> bool:
+    """True when a dotted name Celerp imports is a file of the module's own package."""
+    parts = dotted.split(".")
+    if not all(p.isidentifier() for p in parts) or _reserved(parts[0]):
+        return False
+    if package:  # the migrations runner joins every part onto the module folder
+        return any(p.startswith("/".join(parts) + "/") for p in files)
+    stems = []
+    if f"{parts[0]}/__init__.py" in files:
+        stems.append("/".join(parts))
+    if parts[0] == name:  # the module folder is itself the package
+        stems.append("/".join(parts[1:]))
+    return any(f"{s}.py" in files or posixpath.join(s, "__init__.py") in files
+               for s in stems)
+
+
+def _manifest_findings(files: dict[str, bytes]) -> list[Finding]:
+    """What the manifest makes Celerp import or read must be inside the folder."""
+    manifest = read_manifest(files.get("__init__.py", b""))
+    if manifest is None:
+        return []
+    tree = ast.parse(files["__init__.py"].decode("utf-8", errors="replace"))
+    lines = {n.value: n.lineno for n in ast.walk(manifest_node(tree))
+             if isinstance(n, ast.Constant) and isinstance(n.value, str)}
+    name = manifest.get("name")
+    found, own = [], set()
+
+    def check(key: str, dotted, package: bool = False) -> None:
+        if isinstance(dotted, str) and _own_code(dotted, files, name, package):
+            own.add(dotted.split(".")[0])
+        elif dotted:
+            found.append(Finding("dynamic_code", "__init__.py", lines.get(dotted, 1),
+                                 f"manifest {key} {dotted!r} is not the module's own code"))
+
+    for key in ROUTE_KEYS:
+        check(key, manifest.get(key))
+    check("migrations", manifest.get("migrations"), package=True)
+    for key, ref in _handlers(manifest.get("slots")):
+        check(key, ref.split(":", 1)[0])
+    locales = manifest.get("locales")
+    for entry in (locales.values() if isinstance(locales, dict) else ()):
+        path = entry.get("file") if isinstance(entry, dict) else None
+        if isinstance(path, str) and posixpath.normpath(path) not in files:
+            found.append(Finding("files", "__init__.py", lines.get(path, 1),
+                                 f"locale file {path!r} is not in the module folder"))
+    for p in files:
+        pp = PurePosixPath(p)
+        if _is_test(pp):
+            continue
+        if len(pp.parts) == 1 and pp.suffix == ".py" and pp.name != "__init__.py":
+            top = pp.stem
+        elif len(pp.parts) == 2 and pp.name == "__init__.py":
+            top = pp.parts[0]
+        else:
+            continue
+        if top not in own:
+            found.append(Finding("dynamic_code", p, 1, f"importable as {top!r}, which the "
+                                 "manifest does not name as the module's own package"))
+    return found
+
+
 def _scan_python(path: str, data: bytes) -> list[Finding]:
     try:
         tree = ast.parse(data.decode("utf-8"), filename=path)
@@ -388,7 +543,7 @@ def scan_folder(files: dict[str, bytes]) -> list[Finding]:
     skip_tests = not any(
         _imports_tests(p, files[p]) for p, pp in paths.items()
         if pp.suffix == ".py" and not _is_test(pp))
-    findings: list[Finding] = []
+    findings = _manifest_findings(files)
     for p, pp in sorted(paths.items()):
         if skip_tests and _is_test(pp):
             continue
@@ -397,8 +552,7 @@ def scan_folder(files: dict[str, bytes]) -> list[Finding]:
             findings += _scan_python(p, files[p])
         elif suffix in SCRIPT_SUFFIXES:
             findings += _scan_script(p, files[p])
-        elif suffix not in DATA_SUFFIXES and pp.name.lower() not in DATA_NAMES \
-                and pp.stem.lower() not in DATA_NAMES:
+        elif suffix not in DATA_SUFFIXES and pp.name.lower() not in DATA_NAMES:
             findings.append(Finding("unreadable", p, 1, "not source code or plain data"))
     unique: dict[tuple, Finding] = {}
     for f in findings:

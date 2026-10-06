@@ -69,7 +69,7 @@ MANIFEST = '''PLUGIN_MANIFEST = {{
     "version": "1.0.0",
     "display_name": "{display}",
     "license": "{license}",
-    "api_routes": "{pkg}.routes:router",
+    "api_routes": "{pkg}.routes",
 }}
 '''
 
