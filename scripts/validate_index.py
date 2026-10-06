@@ -69,7 +69,7 @@ def selftest() -> int:
         "schema_version": 1,
         "modules": [
             {"id": "my-module", "name": "My Module", "description": "Does things.",
-             "tier": "community", "repo": "https://github.com/a/b",
+             "tier": "community", "repo": "https://github.com/a/b", "commit": "a" * 40,
              "author": "A", "license": "MIT",
              "data_access": "Its own records.", "network_calls": "None."},
         ],
@@ -88,14 +88,17 @@ def selftest() -> int:
         "community without repo": broken(lambda ms: ms[0].pop("repo")),
         "community without data_access": broken(lambda ms: ms[0].pop("data_access")),
         "community without network_calls": broken(lambda ms: ms[0].pop("network_calls")),
+        "community without commit": broken(lambda ms: ms[0].pop("commit")),
+        "short commit": broken(lambda ms: ms[0].update(commit="abc1234")),
+        "branch name as commit": broken(lambda ms: ms[0].update(commit="main")),
         "community with version": broken(lambda ms: ms[0].update(version="1.0.0")),
         "paid community": broken(lambda ms: ms[0].update(price_monthly=9)),
-        "verified without pin": broken(lambda ms: ms[0].update(tier="verified")),
+        "verified without sha256": broken(lambda ms: ms[0].update(tier="verified")),
         "bad id chars": broken(lambda ms: ms[0].update(id="My Module!")),
         "unknown field": broken(lambda ms: ms[0].update(surprise=1)),
         "unsorted": broken(lambda ms: ms.insert(0, {
             "id": "zz-later", "name": "Z", "description": "Z.",
-            "tier": "community", "repo": "https://github.com/a/z",
+            "tier": "community", "repo": "https://github.com/a/z", "commit": "b" * 40,
             "author": "A", "license": "MIT",
             "data_access": "Its own records.", "network_calls": "None."})),
     }
