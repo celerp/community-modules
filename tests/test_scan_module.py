@@ -317,6 +317,18 @@ class Network(unittest.TestCase):
         # A style comment runs across lines, so a quote on its second line is in it too.
         src = "S = \"/* note\\nit's */ a{background:url('//x\\\\2e example/a')}\"\n"
         self.assertEqual(kinds(py(src)), {"network"})
+        # A style sheet file is read a line at a time, without the comment's start, and an
+        # apostrophe in page text is not style; neither hides a later style escape.
+        for name, text in (
+                ("static/a.css", "/* note\nit's */ a{background:url('//x\\2e example/a')}\n"),
+                ("static/a.html", "<p>Don't</p><style>a{background:url('//x\\2e example/a')}"),
+                ("static/a.html", "<p>Don't</p><b style=\"background:url('//x\\2e example/a')\">")):
+            with self.subTest(text=text[:60]):
+                files = py("x = 1\n")
+                files[name] = text
+                self.assertEqual(kinds(files), {"network"})
+        src = "H = \"<p>Don't</p><style>a{background:url('//x\\\\2e example/a')}</style>\"\n"
+        self.assertEqual(kinds(py(src)), {"network"})
 
     def test_percent_decoded_as_far_as_a_browser_does(self):
         # A browser decodes %XX once; only a % that folding then makes (from a fullwidth
