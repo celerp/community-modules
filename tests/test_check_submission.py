@@ -484,6 +484,17 @@ class PullRequestReadAsData(unittest.TestCase):
         self.assertEqual(sorted(changed), ["README.md index.json", "index.json"])
         self.assertTrue(check_submission._scope_problems(changed))
 
+    def test_catalog_that_moved_after_the_checkout_asks_for_a_new_push(self):
+        (self.up / "later.txt").write_text("x\n")
+        git(self.up, "add", "-A")
+        git(self.up, "commit", "-qm", "main moves after the checkout")
+        head = self.merge_onto_main(10, lambda up: (up / "index.json").write_text("head\n"))
+        with self.assertRaises(check_submission._Stop) as stop:
+            check_submission.pull_request_data(10, head)
+        text = " ".join(stop.exception.args[0])
+        self.assertIn("catalog changed", text)
+        self.assertNotIn("default branch", text)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -403,6 +403,11 @@ def _git(*args: str) -> str:
                           text=True).stdout
 
 
+def _is_ancestor(commit: str, of: str) -> bool:
+    return subprocess.run(["git", "merge-base", "--is-ancestor", commit, of], cwd=ROOT,
+                          capture_output=True).returncode == 0
+
+
 def template_lint(gh):
     """The module template's `lint(folder)`, at its pinned commit."""
     url = (f"https://raw.githubusercontent.com/{TEMPLATE_REPO}/{TEMPLATE_COMMIT}/lint.py")
@@ -426,15 +431,19 @@ def pull_request_data(number: int, head_sha: str) -> tuple[str, list[str], dict,
     files, the listing files at the base and after the merge, and the base's code
     owners."""
     merge = f"refs/listing/{int(number)}"
-    _git("fetch", "--no-tags", "--quiet", "origin", f"+refs/pull/{int(number)}/merge:{merge}")
+    default = "refs/listing/default"
+    branch = _git("symbolic-ref", "--quiet", "HEAD").strip()
+    _git("fetch", "--no-tags", "--quiet", "origin", f"+refs/pull/{int(number)}/merge:{merge}",
+         f"+{branch}:{default}")
     parents = _git("rev-list", "--parents", "-n", "1", merge).split()[1:]
     if len(parents) != 2 or parents[1] != head_sha:
         raise _Stop(["GitHub has not prepared a merge of this pull request's latest commit "
                      "(it may conflict with the catalog). Update the branch and push again."])
     base_sha = parents[0]
-    on_default = subprocess.run(["git", "merge-base", "--is-ancestor", base_sha, "HEAD"],
-                                cwd=ROOT, capture_output=True).returncode == 0
-    if not on_default:
+    if not _is_ancestor(base_sha, "HEAD"):
+        if _is_ancestor(base_sha, default):
+            raise _Stop(["The catalog changed while this check was starting. Push a new "
+                         "commit (an empty one is fine) to run it again."])
         raise _Stop(["This pull request does not target the catalog's default branch."])
     changed = [f for f in _git("diff", "-z", "--name-only", "--no-renames", base_sha,
                                merge).split("\0") if f]
