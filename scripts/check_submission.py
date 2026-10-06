@@ -214,9 +214,10 @@ def _repo_problems(entry: dict, gh) -> tuple[str, str, list[str]]:
 
 
 def _is_manifest(data: bytes) -> bool:
+    # Decoded the way Celerp's importer decodes it, so both pick the same module folder.
     try:
-        tree = ast.parse(data.decode("utf-8"))
-    except (UnicodeDecodeError, SyntaxError, ValueError):
+        tree = ast.parse(data.decode("utf-8", errors="replace"))
+    except (SyntaxError, ValueError):
         return False
     return _manifest_node(tree) is not None
 
@@ -230,7 +231,7 @@ def _manifest_node(tree: ast.AST):
 
 
 def _manifest(data: bytes) -> dict | None:
-    node = _manifest_node(ast.parse(data.decode("utf-8")))
+    node = _manifest_node(ast.parse(data.decode("utf-8", errors="replace")))
     try:
         value = ast.literal_eval(node.value)
     except (ValueError, TypeError, SyntaxError, MemoryError, RecursionError):
@@ -299,7 +300,8 @@ def _module_problems(entry: dict, files: dict[str, bytes], lint) -> tuple[dict, 
             dest = folder / rel
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_bytes(data)
-        problems += [f"Template lint: {p.replace(str(folder), entry['id'])}" for p in lint(folder)]
+        problems += [f"Template lint: {' '.join(p.replace(str(folder), entry['id']).split())}"
+                     for p in lint(folder)]
     return manifest, problems
 
 

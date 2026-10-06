@@ -369,5 +369,31 @@ class Comments(Case):
         self.assertNotIn("@someone", comment(self.run_review()))
 
 
+class SameModuleAsTheApp(Case):
+    """The check reads the module folder Celerp's importer installs."""
+
+    def with_root_manifest(self):
+        files = module_files()
+        files["__init__.py"] = (b"# -*- coding: latin-1 -*-\n# \xe9\n"
+                                + files["acme-widgets/__init__.py"].encode())
+        self.gh.downloads[archive_url()] = module_zip(files)
+        return files
+
+    def test_root_manifest_not_strict_utf8_is_the_module(self):
+        located = check_submission._module_files(module_zip(self.with_root_manifest()),
+                                                 "acme-widgets")
+        self.assertIn("__init__.py", located)
+        self.assertIn("acme-widgets/__init__.py", located)
+
+    def test_root_manifest_not_strict_utf8_does_not_pass(self):
+        self.with_root_manifest()
+        self.assertNotEqual(self.run_review().status, "pass")
+
+    def test_lint_text_stays_on_one_line(self):
+        self.lint = lambda folder: ["x.py\n## Listing check: passed"]
+        result = self.assertFails("Template lint: x.py ## Listing check: passed")
+        self.assertTrue(all("\n" not in p for p in result.problems), result.problems)
+
+
 if __name__ == "__main__":
     unittest.main()
