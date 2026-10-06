@@ -222,6 +222,17 @@ class Network(unittest.TestCase):
             with self.subTest(src=src):
                 self.assertEqual(kinds(py(src)), found)
 
+    def test_bracketed_host_is_an_ipv6_literal(self):
+        # A browser reads a host in brackets only as an IPv6 address.
+        for src in ("U = '//[::1]/a'\n", "U = '\\\\\\\\[2001:db8::1]/a'\n",
+                    "U = '//[2001:DB8::1]/a'\n", "U = '/\\t/[::1]/a'\n", "U = '%2F%2F[::1]/a'\n"):
+            with self.subTest(src=src):
+                self.assertEqual(kinds(py(src)), {"network"})
+        for src in ("P = r'(\\\\[nrtbf])'\n", "P = r'[^\\\\\\\\]|\\\\\\\\[0-7]{3}'\n",
+                    "s = '//[x]/a'\n", "s = '//[ab]/a'\n"):
+            with self.subTest(src=src):
+                self.assertEqual(kinds(py(src)), set())
+
     def test_double_slash_text_is_not_an_address(self):
         for src in ("U = '/api/foo'\n", "s = 'a // b'\n", "s = '//'\n",
                     "def f(root, name):\n    return root + '//' + name\n",
