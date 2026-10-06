@@ -15,18 +15,18 @@ Python is read with `ast`, names are resolved through the file's own imports, so
 script, page and style sheet files and in the module's Python strings and bytes,
 docstrings left out unless the file reads them back through `__doc__`. A web
 address counts with a scheme (`https://host/...`). One without a scheme
-(`//host/...`) counts when its host has a bracket, or a dot or colon with more
-of the host after it; a single word such as `//name/` does not. Text is read the
-way a browser reads an address, with tab and newline characters dropped,
-backslashes as slashes, look-alike characters folded and percent-encoding
-decoded, before it is matched. An address or call built while the code runs is
-not followed. Where the scan cannot follow a name (a module such as `os` stored
-or passed as a value, an attribute name built at runtime) it reports that
-instead, as it does code that changes names in modules Python, Celerp or its
-libraries provide. It is a review aid, not a security boundary: it reports the
-ordinary ways of doing these things, not every way Python can reach a name, and
-a clean scan is not proof of what the code does. Test files are left out unless
-the module's own code imports them.
+(`//host/...`) counts when its host is an IPv6 address in brackets, or has a dot
+or colon with more of the host after it; a single word such as `//name/` does
+not. Text is read the way a browser reads an address, with tab and newline
+characters dropped, backslashes as slashes, look-alike characters folded and
+percent-encoding decoded, before it is matched. An address or call built while
+the code runs is not followed. Where the scan cannot follow a name (a module
+such as `os` stored or passed as a value, an attribute name built at runtime) it
+reports that instead, as it does code that changes names in modules Python,
+Celerp or its libraries provide. It is a review aid, not a security boundary: it
+reports the ordinary ways of doing these things, not every way Python can reach
+a name, and a clean scan is not proof of what the code does. Test files are left
+out unless the module's own code imports them.
 """
 from __future__ import annotations
 
@@ -165,16 +165,17 @@ PATH_METHODS = ("resolve", "absolute", "joinpath", "with_suffix", "with_name", "
 BAD_SEGMENT = re.compile(r"(^|[/\\])\.\.([/\\]|$)|^[/\\]|^[A-Za-z]:|^~")
 # An address without a scheme (//host/...) uses the page's own scheme to reach that
 # host. Browsers skip extra slashes and a user name up to the last @. The host runs to
-# the first space or / \ ? # ' " ` < > ( ), or the end. It is an address when it holds
-# a letter or digit, and a [ or a . or : followed by something other than . , ; : !
-# ("//done." and "//TODO: x" are text). A host followed by ( is a call, as in
-# "//console.log(x)", and "a // b" or a single word ("//intranet/") is not an address.
+# the first space or / \ ? # ' " ` < > ( ), or the end. It is an address when it holds a
+# letter or digit, and is an IPv6 address in [ ] (the only bracketed host a browser
+# accepts) or has a . or : followed by something other than . , ; : ! ("//done." and
+# "//TODO: x" are text). A host followed by ( is a call, as in "//console.log(x)", and
+# "a // b" or a single word ("//intranet/") is not an address.
 # The pattern reads plain ASCII; _as_browser_reads turns other spellings into it.
 USER_CHAR = r"[^\s/\\?#]"
 HOST_CHAR = r"[^\s/\\?#'\"`<>()]"
 NETWORK_PATH = (rf"(?<![\w:/.\\])//+"
                 rf"(?:(?=(?P<user>{USER_CHAR}*@))(?P=user)|(?!{USER_CHAR}*@))"
-                rf"(?={HOST_CHAR}*?\[|[^\s/\\?#'\"`<>().:]*[.:]{HOST_CHAR}*?"
+                rf"(?=\[[0-9a-f:.]*:[0-9a-f:.]*\]|[^\s/\\?#'\"`<>().:]*[.:]{HOST_CHAR}*?"
                 rf"[^\s/\\?#'\"`<>().,;:!])"
                 rf"(?={HOST_CHAR}*?[^\W_])(?={HOST_CHAR}*(?!{HOST_CHAR}|\())")
 URL = re.compile(rf"\b(?:https?|wss?|ftp)://|{NETWORK_PATH}", re.I)
