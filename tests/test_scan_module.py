@@ -116,15 +116,14 @@ class Network(unittest.TestCase):
                 self.assertEqual(kinds(py(src)), {"network"})
         self.assertEqual(kinds(py("s = b'eval(src)'.decode()\n")), {"dynamic_code"})
 
-    def test_docstring_read_back_is_scanned(self):
-        # A docstring the module reads back through __doc__ can reach the page.
+    def test_docstring_read_at_runtime_goes_to_review(self):
         for name, src in {
-            "function": "def js():\n    \"fetch(u)\"\ns = js.__doc__\n",
-            "module": "\"\"\"fetch(u)\"\"\"\ns = __doc__\n",
-            "getattr": "class J:\n    \"fetch(u)\"\ns = getattr(J, '__doc__')\n",
+            "module": "\"\"\"Notes.\"\"\"\ns = __doc__\n",
+            "attribute": "def f():\n    \"Notes.\"\ns = f.__doc__\n",
+            "getattr": "class J:\n    \"Notes.\"\ns = getattr(J, '__doc__')\n",
         }.items():
             with self.subTest(name):
-                self.assertEqual(kinds(py(src)), {"network"})
+                self.assertEqual(kinds(py(src)), {"dynamic_code"})
 
     def test_address_without_a_scheme(self):
         # //host/... reaches another host exactly as https://host/... does.
