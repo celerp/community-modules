@@ -268,6 +268,36 @@ class Network(unittest.TestCase):
         files["static/a.js"] = "var u = '/\\\\x2f/x.example/a';\n"  # an escaped backslash
         self.assertEqual(kinds(files), set())
 
+    def test_escapes_are_read_by_their_own_language(self):
+        # Script reads \. as ".", style sheets read \2e  as "."; markup, script and style
+        # are all built in Python. Neither language reads the other's escapes.
+        for name, text, found in (
+                ("static/a.js", "var u = '//x\\.example/a';\n", {"network"}),
+                ("static/a.css", "a{background:url(//x\\2e example/a)}\n", {"network"}),
+                ("static/a.css", "a{background:url(//x\\.example/a)}\n", {"network"}),
+                ("static/a.html", "<style>a{background:url(//x\\2E example/a)}</style>\n",
+                 {"network"}),
+                ("static/a.js", "var u = '//x&#46;example/a';\n", set()),
+                ("static/a.css", "a{background:url(//x&#46;example/a)}\n", set()),
+                ("static/a.css", "a{background:url('//x\\x2eexample/a')}\n", set())):
+            with self.subTest(text=text):
+                files = py("x = 1\n")
+                files[name] = text
+                self.assertEqual(kinds(files), found)
+        for src in ("S = 'a{background:url(//x\\\\2e example/a)}'\n",
+                    "S = b'<img src=\"//x&#46;example/a\">'\n",
+                    "S = '<script>u = \"//x\\\\x2eexample/a\"</script>'\n"):
+            with self.subTest(src=src):
+                self.assertEqual(kinds(py(src)), {"network"})
+
+    def test_percent_decoded_as_far_as_a_browser_does(self):
+        # A browser decodes %XX once; only a % that folding then makes (from a fullwidth
+        # sign) is decoded again. A % the first decode leaves, or a third level, is not.
+        self.assertEqual(kinds(py("U = '//x%EF%BC%852eexample/a'\n")), {"network"})
+        for src in ("U = '//x%252eexample/a'\n", "U = '//x\\uff05252eexample/a'\n"):
+            with self.subTest(src=src):
+                self.assertEqual(kinds(py(src)), set())
+
     def test_bracketed_host_is_an_ipv6_literal(self):
         # A browser reads a host in brackets only as an IPv6 address.
         for src in ("U = '//[::1]/a'\n", "U = '\\\\\\\\[2001:db8::1]/a'\n",
