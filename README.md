@@ -135,27 +135,14 @@ the scan cannot follow, such as a module like `os` stored in a variable or an
 attribute name built while the code runs, is flagged too, and so is code that
 changes names in modules Python, Celerp or its libraries provide.
 
-The scan is a review aid, not a security boundary. It reads the code without
-running it and catches the ordinary ways of doing these things. A web address
-counts when it is written with a scheme (`https://host/...`). One written
-without a scheme (`//host/...`) counts when its host is an IPv6 address in
-brackets, or has a dot or colon with more of the host after it; a single word
-such as `//name/` does not. Text is read the way a browser reads an address.
-Escapes are decoded in the language the text is written in (character references
-such as `&#46;` in markup, `\x2e` in script, `\2e` in style sheets, all three in
-strings built in Python), then tab and newline characters are dropped (and,
-separately, read as a space between two addresses), backslashes read as slashes,
-look-alike characters folded, characters IDNA ignores dropped and
-percent-encoding decoded as far as a browser decodes it, before the text is
-matched. Letters a browser folds that are newer than the Unicode data of Python
-3.12, which the checks run on, are listed by hand, so letters added in a later
-Unicode version are not folded. An address or call built while the code runs,
-from pieces, variables or lookups, is not followed. It does not follow every way
-Python can reach a name, for example through attributes of other objects,
-private names inside standard modules, or binding orders Python resolves
-differently than the scan reads them, so a passed check is not proof that a
-module does only what it declares. Anything it cannot follow is left to a human
-reviewer.
+The scan is a review aid, not a security boundary. It reads the code as written,
+without running it, and asks one question: does the module obviously make network
+calls, run code built at runtime, or contain something the scan cannot
+confidently classify? If so, a human looks at it. A web address counts when it
+names another host, with a scheme (`https://host/...`) or without one
+(`//host.example/...`); paths inside Celerp (`/api/...`) do not. Docstrings are
+not scanned, and code that reads one back through `__doc__` is flagged. A passed
+check is not proof that a module does only what it declares.
 
 ### What happens next
 
