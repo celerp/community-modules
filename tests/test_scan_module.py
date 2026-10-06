@@ -168,6 +168,9 @@ class Network(unittest.TestCase):
             "tab after the slashes": "U = '//\\t/x.example/a'\n",
             "newline after the slashes": "U = '//\\n/cdn.example/a.js'\n",
             "full stop in bytes": "U = b'//x\\xe3\\x80\\x82example/a'\n",
+            "tab in a percent-encoded dot": "U = '//x%2\\teexample/a'\n",
+            "fullwidth percent-encoded dot": "U = '//x\uff05\uff12\uff45example/a'\n",
+            "small percent sign": "U = '//x\ufe6a2eexample/a'\n",
         }.items():
             with self.subTest(name):
                 self.assertEqual(kinds(py(src)), {"network"})
