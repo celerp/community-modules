@@ -128,7 +128,8 @@ package and files. Network calls your `network_calls`
 declares are fine. Anything else it finds is **flagged**: the pull request gets
 the `needs-review` label and waits for the maintainer. Code the scan cannot
 follow, such as a module like `os` stored in a variable or an attribute name
-built while the code runs, is flagged too.
+built while the code runs, is flagged too, and so is code that changes names in
+modules Python, Celerp or its libraries provide.
 
 The scan reads the code without running it. It is a heuristic: it catches the
 ordinary ways of doing these things, but code written to hide from it can get

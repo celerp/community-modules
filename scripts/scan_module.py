@@ -13,9 +13,10 @@ handlers, migrations) must be the module's own package, and the files it reads
 Python is read with `ast`, names are resolved through the file's own imports,
 so `import os as o; o.system(...)` is seen as `os.system`. Where the scan cannot
 follow a name (a module such as `os` stored or passed as a value, an attribute
-name built at runtime) it reports that instead. It is a heuristic: it reports
-the ordinary ways of doing these things, not every way code can hide them. Test
-files are left out unless the module's own code imports them.
+name built at runtime) it reports that instead, as it does code that changes
+names in modules Python, Celerp or its libraries provide. It is a heuristic: it
+reports the ordinary ways of doing these things, not every way code can hide
+them. Test files are left out unless the module's own code imports them.
 """
 from __future__ import annotations
 
@@ -88,6 +89,8 @@ DYNAMIC = (
     "celerp.modules.slots.resolve_handler", "celerp.modules.slots.register",
     "celerp.modules.loader", "celerp.modules.importer", "celerp.modules.migrations_runner",
 )
+# Parts of those that only read package metadata or test what an object is.
+READ_ONLY = re.compile(r"^importlib\.metadata(\.|$)|^inspect(\.is[a-z]+)?$")
 SECRETS = ("os.environ", "os.environb", "os.getenv", "os.getenvb", "os.putenv",
            "os.unsetenv", "getpass", "keyring", "netrc", "dotenv",
            "celerp.gateway.state", "celerp.connectors.relay_token")
@@ -103,8 +106,7 @@ SETTINGS_METHODS = re.compile(
 # Everything else in celerp.config reads or writes Celerp's configuration file.
 CONFIG_FILE = "celerp.config"
 UI_CONFIG = "ui.config"
-# Top-level packages Celerp itself provides; a module's code reached through them
-# is checked as the standard module it names (ui.config.os.environ is os.environ).
+# Top-level packages Celerp itself provides.
 CORE_PACKAGES = ("celerp", "ui")
 # Top-level names of the libraries installed with Celerp, and of those its code
 # imports when present. The module folder and the modules directory sit first on
@@ -139,6 +141,8 @@ FILE_CALLS = (
 PATH_KWARGS = ("path", "file", "filename", "src", "dst")
 DATA_DIR = "celerp.config.settings.data_dir"
 # Calls that keep a path inside the folder its first argument names.
+# Files held in memory, never on disk.
+IN_MEMORY = ("io.BytesIO", "io.StringIO")
 PATH_KEEPERS = ("pathlib.Path", "pathlib.PurePath", "str", "os.fspath", "os.path.join")
 PATH_JOINERS = ("pathlib.Path", "pathlib.PurePath", "os.path.join")
 PATH_METHODS = ("resolve", "absolute", "joinpath", "with_suffix", "with_name", "as_posix")
@@ -157,7 +161,8 @@ DATA_NAMES = {"license", "licence", "copying", "notice", "readme", "changelog", 
 # Attributes that reach another frame's names, a function's globals or every class,
 # and through them anything a module could import.
 INTROSPECTION = {"f_globals", "f_builtins", "f_locals", "f_back", "gi_frame", "cr_frame",
-                 "ag_frame", "tb_frame", "__globals__", "__builtins__", "__subclasses__"}
+                 "ag_frame", "tb_frame", "__globals__", "__builtins__", "__subclasses__",
+                 "__dict__", "__getattribute__", "__getattr__"}
 # Calls that take an attribute name; one built at runtime can reach any name.
 NAMED_ATTRIBUTE = {"getattr": slice(1, 2), "operator.attrgetter": slice(None),
                    "operator.methodcaller": slice(0, 1)}
@@ -179,10 +184,15 @@ def _is_test(path: PurePosixPath) -> bool:
             or any(part in ("tests", "test") for part in path.parts[:-1]))
 
 
-def _reserved(top: str) -> bool:
-    """A top-level name Python or Celerp already provides."""
+def _provided(top: str) -> bool:
+    """A top-level module Python, Celerp or a library Celerp uses provides."""
     return top in sys.stdlib_module_names or _matches(top, CORE_PACKAGES) \
-        or top.startswith("celerp") or top in CELERP_LIBRARIES
+        or top in CELERP_LIBRARIES
+
+
+def _reserved(top: str) -> bool:
+    """A top-level name Python or Celerp already provides, or one Celerp reserves."""
+    return _provided(top) or top.startswith("celerp")
 
 
 PROVIDED = "a name Python, Celerp or a library Celerp uses already provides"
@@ -201,19 +211,23 @@ def _secret_config(name: str) -> bool:
 
 
 def _variants(name: str) -> list[str]:
-    """The name, and the standard modules a core package wrapper re-exports under it."""
+    """The name, and the standard modules it reaches through the imports of a
+    module Python, Celerp or a library provides: logging.os.environ and
+    ui.config.os.environ are os.environ."""
     parts = name.split(".")
-    if not _matches(name, CORE_PACKAGES):
+    if not _provided(parts[0]):
         return [name]
     return [name, *(".".join(parts[i:]) for i in range(1, len(parts))
                     if parts[i] in sys.stdlib_module_names)]
 
 
-# Modules and objects that hold a name the scan reports, such as os (os.system).
-# Passed on as a value, what is later called through them cannot be followed.
-HOLDERS = frozenset(".".join(n.split(".")[:i])
-                    for n in (*NETWORK, *PROCESS, *DYNAMIC, *SECRETS, *FILE_CALLS, *HTTPX_CALLS)
-                    for i in range(1, n.count(".") + 1))
+# Modules and objects that hold a name the scan reports, such as os (os.system),
+# and modules only part of which is read-only (inspect). Passed on as a value,
+# what is later called through them cannot be followed.
+REPORTED = (*NETWORK, *PROCESS, *DYNAMIC, *SECRETS, *FILE_CALLS, *HTTPX_CALLS)
+HOLDERS = frozenset({*(".".join(n.split(".")[:i])
+                       for n in REPORTED for i in range(1, n.count(".") + 1)),
+                     *(n for n in DYNAMIC if READ_ONLY.match(n))})
 UNFOLLOWED = "passed on as a value, so the scan cannot follow what is called through it"
 
 
@@ -227,11 +241,28 @@ def _names_tests(module: str) -> bool:
 class _Scope:
     def __init__(self, parent: "_Scope | None"):
         self.parent = parent
-        # name -> list of ("import", dotted) or ("value", expr or None)
+        # name -> list of ("import", dotted), ("value", expr or None) or
+        # ("item", the iterable a loop takes it from)
         self.binds: dict[str, list[tuple[str, object]]] = {}
+        # names a global or nonlocal statement binds in another scope
+        self.elsewhere: dict[str, _Scope] = {}
 
     def bind(self, name: str, kind: str, value) -> None:
-        self.binds.setdefault(name, []).append((kind, value))
+        if name in self.elsewhere:
+            self.elsewhere[name].bind(name, kind, value)
+        else:
+            self.binds.setdefault(name, []).append((kind, value))
+
+    def declare(self, name: str, is_global: bool) -> None:
+        """global/nonlocal: later bindings of the name belong to that scope."""
+        target = self.parent
+        if is_global:
+            while target.parent is not None:
+                target = target.parent
+        else:
+            while target.parent is not None and name not in target.binds:
+                target = target.parent
+        self.elsewhere[name] = target
 
     def lookup(self, name: str):
         scope = self
@@ -289,14 +320,21 @@ def _collect(node: ast.AST, scope: _Scope, scopes: dict[int, _Scope]) -> None:
         elif isinstance(child, ast.NamedExpr):
             _bind_targets(child.target, scope, child.value)
         elif isinstance(child, (ast.For, ast.AsyncFor, ast.comprehension)):
-            _bind_targets(child.target, scope, None)
+            if isinstance(child.target, ast.Name):
+                scope.bind(child.target.id, "item", child.iter)
+            else:
+                _bind_targets(child.target, scope, None)
         elif isinstance(child, ast.withitem) and child.optional_vars is not None:
             _bind_targets(child.optional_vars, scope, child.context_expr)
         elif isinstance(child, ast.ExceptHandler) and child.name:
             scope.bind(child.name, "value", None)
-        elif isinstance(child, (ast.Global, ast.Nonlocal)):
+        elif isinstance(child, (ast.MatchAs, ast.MatchStar)) and child.name:
+            scope.bind(child.name, "value", None)
+        elif isinstance(child, ast.MatchMapping) and child.rest:
+            scope.bind(child.rest, "value", None)
+        elif isinstance(child, (ast.Global, ast.Nonlocal)) and scope.parent is not None:
             for name in child.names:
-                scope.bind(name, "value", None)
+                scope.declare(name, isinstance(child, ast.Global))
         _collect(child, inner, scopes)
 
 
@@ -330,8 +368,26 @@ class _File:
             return f"{base}.{node.args[1].value}" if base else None
         return None
 
+    def attr_names(self, node: ast.AST, scope: _Scope) -> list[str] | None:
+        """The attribute names an argument can hold: a literal, or a loop variable
+        over literals. None when the name is built while the code runs."""
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return [node.value]
+        if isinstance(node, ast.Name):
+            _, binds = scope.lookup(node.id)
+            names = [_str_literals(v) if k == "item" else None for k, v in binds or ()]
+            if names and None not in names:
+                return [n for group in names for n in group]
+        return None
+
+    def got_names(self, node: ast.Call, scope: _Scope) -> list[str]:
+        """Dotted names a getattr call can return, when its object resolves."""
+        base = self.resolve(node.args[0], scope) if node.args else None
+        names = self.attr_names(node.args[1], scope) if len(node.args) >= 2 else None
+        return [f"{base}.{n}" for n in names] if base and names else []
+
     def rooted(self, node: ast.AST, scope: _Scope, seen: frozenset = frozenset()) -> bool:
-        """True when a path expression stays inside Celerp's data folder."""
+        """True when a path expression stays inside Celerp's data folder or in memory."""
         if isinstance(node, ast.Name):
             owner, binds = scope.lookup(node.id)
             if binds is None or (node.id, id(owner)) in seen:
@@ -342,6 +398,8 @@ class _File:
         if self.resolve(node, scope) == DATA_DIR:
             return True
         if isinstance(node, ast.Call):
+            if self.resolve(node.func, scope) in IN_MEMORY:
+                return True
             if self.resolve(node.func, scope) in PATH_KEEPERS:
                 return bool(node.args) and self.rooted(node.args[0], scope, seen) and \
                     self._safe_parts(node.args[1:])
@@ -409,7 +467,7 @@ class _File:
                 self.add("network", node, name)
             if _matches(n, PROCESS):
                 self.add("process", node, name)
-            if _matches(n, DYNAMIC) and not n.startswith("importlib.metadata"):
+            if _matches(n, DYNAMIC) and not READ_ONLY.match(n):
                 self.add("dynamic_code", node, name)
             if _matches(n, SECRETS):
                 self.add("secrets", node, name)
@@ -421,20 +479,23 @@ class _File:
                 self.add("dynamic_code", node, f"{name} {UNFOLLOWED}")
             elif _matches(n, FILE_CALLS):
                 self.add("files", node, f"{name} {UNFOLLOWED}")
+            elif n in HTTPX_CALLS:
+                self.add("network", node, f"{name} {UNFOLLOWED}")
 
     def _followed(self) -> set[int]:
-        """Uses the scan follows: attribute reads, calls, annotations and type checks."""
+        """Uses the scan follows: attribute reads, calls, type annotations and checks."""
         ids: set[int] = set()
         for n in ast.walk(self.tree):
             if isinstance(n, ast.Attribute):
                 ids.add(id(n.value))
             elif isinstance(n, ast.Call):
                 ids.add(id(n.func))
-                name = self.resolve(n.func, self.scopes.get(id(n), _Scope(None)))
+                scope = self.scopes.get(id(n), _Scope(None))
+                name = self.resolve(n.func, scope)
                 if name in ("isinstance", "issubclass"):
                     ids.update(id(a) for a in n.args[1:])
-                elif name in ("getattr", "hasattr") and len(n.args) >= 2 and isinstance(
-                        n.args[1], ast.Constant) and isinstance(n.args[1].value, str):
+                elif name in ("getattr", "hasattr") and len(n.args) >= 2 and self.attr_names(
+                        n.args[1], scope) is not None:
                     ids.add(id(n.args[0]))
             annotations = []
             if isinstance(n, ast.arg):
@@ -444,8 +505,7 @@ class _File:
             elif isinstance(n, ast.AnnAssign):
                 annotations.append(n.annotation)
             for a in annotations:
-                if a is not None:
-                    ids.update(id(x) for x in ast.walk(a))
+                ids.update(id(x) for x in _type_nodes(a))
         return ids
 
     def scan(self) -> list[Finding]:
@@ -483,8 +543,18 @@ class _File:
                     self.check_name(name, node)
                 if name and id(node) not in followed:
                     self.check_value(name, node)
+                if name is None and isinstance(node, ast.Name):
+                    # bound to an import and to something else: either may be used
+                    _, binds = scope.lookup(node.id)
+                    for dotted in {v for k, v in binds if k == "import" and v}:
+                        self.check_value(dotted, node)
+            elif isinstance(node, ast.Attribute):
+                self.check_store(node.value, node, scope)
             elif isinstance(node, ast.Call):
                 self.check_call(node, scope)
+                if id(node) not in followed:
+                    for name in self.got_names(node, scope):
+                        self.check_value(name, node)
             elif (isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div)
                   and not self._safe_parts([node.right])):
                 self.add("files", node, "a path that leaves its folder")
@@ -493,14 +563,24 @@ class _File:
                 self.add("network", node, "a web address in the code")
         return self.findings
 
+    def check_store(self, obj: ast.AST, node: ast.AST, scope: _Scope) -> None:
+        """An attribute set or deleted on obj."""
+        name = self.resolve(obj, scope)
+        if name is not None and _reserved(name.split(".")[0]):
+            self.add("dynamic_code", node, f"changes a name in {name}, which other code uses")
+        elif name is None and self.own_client(obj, scope):
+            self.add("network", node, "changes Celerp's own API client")
+
     def check_call(self, node: ast.Call, scope: _Scope) -> None:
         name = self.resolve(node.func, scope)
         if name is None:
             return
         if name != "getattr":
             self.check_name(name, node)
-        elif (target := self.resolve(node, scope)) is not None:
+        for target in self.got_names(node, scope) if name == "getattr" else ():
             self.check_name(target, node)
+        if name in ("setattr", "delattr") and node.args:
+            self.check_store(node.args[0], node, scope)
         if name in PATH_JOINERS and not self._safe_parts(node.args[1:]):
             self.add("files", node, "a path that leaves its folder")
         if (isinstance(node.func, ast.Attribute) and node.func.attr in PATH_METHODS
@@ -508,8 +588,7 @@ class _File:
             self.add("files", node, "a path that leaves its folder")
         if name in NAMED_ATTRIBUTE:
             names = node.args[NAMED_ATTRIBUTE[name]]
-            computed = not names or not all(
-                isinstance(a, ast.Constant) and isinstance(a.value, str) for a in names)
+            computed = not names or any(self.attr_names(a, scope) is None for a in names)
             # A request method picked by name on Celerp's own API client stays an API call.
             if computed and not (name == "getattr" and self.own_client(node.args[0], scope)):
                 self.add("dynamic_code", node, f"{name} with a computed name")
@@ -520,6 +599,28 @@ class _File:
             if not args or not all(self.rooted(a, scope) for a in args[:1]) \
                     or not self._safe_parts(args[1:]):
                 self.add("files", node, name)
+
+
+def _str_literals(node) -> list[str] | None:
+    """The strings of a literal tuple, list or set of strings."""
+    if isinstance(node, (ast.Tuple, ast.List, ast.Set)) and all(
+            isinstance(e, ast.Constant) and isinstance(e.value, str) for e in node.elts):
+        return [e.value for e in node.elts]
+    return None
+
+
+def _type_nodes(node):
+    """An annotation's nodes that only name a type. A call, walrus or lambda in it
+    runs when the annotation is evaluated, so it is scanned like other code."""
+    if node is None:
+        return
+    yield node
+    children = {ast.Subscript: ("value", "slice"), ast.BinOp: ("left", "right"),
+                ast.Tuple: ("elts",), ast.List: ("elts",)}.get(type(node), ())
+    for field in children:
+        value = getattr(node, field)
+        for child in value if isinstance(value, list) else [value]:
+            yield from _type_nodes(child)
 
 
 def _own_returns(func: ast.AST):

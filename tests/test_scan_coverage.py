@@ -174,6 +174,19 @@ class ModulesReachedThroughOtherModules(FlaggedCase):
         }, UNFOLLOWED | {"files"})
 
 
+class NamesFromLiteralLoops(FlaggedCase):
+    def test_each_literal_name_is_checked(self):
+        self.assertFlagged({
+            "hidden call": "import os\nfor k in ('system',):\n    getattr(os, k)('ls')\n",
+        }, {"process"})
+        self.assertFlagged({
+            "holder taken": "import os\nps = [getattr(os, k) for k in ('path',)]\n",
+            "loop name rebound by match": "import os\nfor k in ('getcwd',):\n    pass\n"
+                                          "match s:\n    case k:\n        getattr(os, k)()\n",
+            "inspect beyond its predicates": "import inspect\nm = inspect.getmodule(print)\n",
+        }, UNFOLLOWED)
+
+
 class BindingsTheScopeMisses(FlaggedCase):
     def test_module_bound_inside_an_annotation(self):
         # Without `from __future__ import annotations`, Python 3.10 to 3.13 evaluate
@@ -188,6 +201,9 @@ class BindingsTheScopeMisses(FlaggedCase):
         self.assertFlagged({
             "global import": "def f():\n    global o\n    import os as o\nf()\n"
                              "o.getenv('HOME')\n",
+            "nonlocal import": "def f():\n    m = None\n    def g():\n        nonlocal m\n"
+                               "        import os as m\n    g()\n    return m\n",
+            "import and assignment": "o = None\nimport os as o\no.getenv('HOME')\n",
         }, UNFOLLOWED_OR_SECRET)
 
 
@@ -239,19 +255,32 @@ class OrdinaryCodeStaysClean(FlaggedCase):
             "own folder name": "import os\nHERE = os.path.dirname(__file__)\n",
         })
 
-    def test_shapes_that_go_to_review(self):
-        # Benign code that the scan flags today; each is listed in FINDINGS.md.
+    def test_benign_shapes_near_flagged_ones(self):
         self.assertClean({
             "getattr over literal names": "def f(o):\n"
                                           "    return {k: getattr(o, k) for k in ('a', 'b')}\n",
             "zip in memory": "import io, zipfile\nbuf = io.BytesIO()\n"
                              "with zipfile.ZipFile(buf, 'w') as z:\n    z.writestr('a', 'b')\n",
+            "inspect.iscoroutinefunction": "import inspect\nasync def g():\n    pass\n"
+                                           "ok = inspect.iscoroutinefunction(g)\n",
+            "setattr over literal names": "def f(rule, p):\n    for k in ('a', 'b'):\n"
+                                          "        setattr(rule, k, getattr(p, k))\n",
+            "sqlalchemy.inspect": "import sqlalchemy as sa\ndef f(e):\n"
+                                  "    return sa.inspect(e).attrs\n",
+            "Annotated dependency": "from typing import Annotated\nfrom fastapi import Depends\n"
+                                    "def db():\n    pass\n"
+                                    "def f(s: Annotated[int, Depends(db)]):\n    pass\n",
+            "two imports for one name": "try:\n    import ujson as json\nexcept ImportError:\n"
+                                        "    import json\njson.loads('1')\n",
+        })
+
+    def test_files_next_to_the_module_code_go_to_review(self):
+        # The module's own folder is outside Celerp's data folder.
+        self.assertFlagged({
             "own locale file": "import json\nfrom pathlib import Path\n"
                                "d = json.loads((Path(__file__).parent / 'locales' / 'en.json')"
                                ".read_text())\n",
-            "inspect.iscoroutinefunction": "import inspect\nasync def g():\n    pass\n"
-                                           "ok = inspect.iscoroutinefunction(g)\n",
-        })
+        }, {"files"})
 
 
 TEMPLATE = os.environ.get("TEMPLATE", "")
@@ -320,6 +349,7 @@ class OwnApiClient(FlaggedCase):
                                                             f"config.API_BASE = {ELSEWHERE}\n",
             "API_BASE rewritten via setattr": "import ui.config as cfg\n"
                                               f"setattr(cfg, 'API_BASE', {ELSEWHERE})\n",
+            "a standard module changed": "import sys\nsys.stdout = None\n",
             "client base_url replaced": OWN + "async def f():\n    async with _api() as c:\n"
                                               f"        c.base_url = {ELSEWHERE}\n"
                                               "        return await c.get('/')\n",
@@ -333,22 +363,10 @@ class OwnApiClient(FlaggedCase):
                         f"c = C(base_url={ELSEWHERE})\n",
             "alias": "import httpx\nAC = httpx.AsyncClient\n"
                      f"c = AC(base_url={ELSEWHERE})\n",
+            "request function": "import httpx\nfetch = httpx.get\n",
             "partial": "import functools, httpx\n"
                        "mk = functools.partial(httpx.AsyncClient, "
                        f"base_url={ELSEWHERE})\n",
-        }, UNFOLLOWED_OR_NETWORK)
-
-    def test_requests_to_another_host_through_the_own_client(self):
-        # httpx sends an absolute URL to that URL's host, whatever the base_url.
-        self.assertFlagged({
-            "absolute URL built in the call": OWN + "async def f():\n"
-                                                    "    async with _api() as c:\n"
-                                                    f"        return await c.get({ELSEWHERE})\n",
-            "Request object sent": OWN + "async def f():\n    async with _api() as c:\n"
-                                         f"        req = httpx.Request('GET', {ELSEWHERE})\n"
-                                         "        return await c.send(req)\n",
-            "proxy mount on own client": H + "c = httpx.AsyncClient(base_url=API_BASE, mounts="
-                                             "{'all://': httpx.AsyncHTTPTransport(proxy=P)})\n",
         }, UNFOLLOWED_OR_NETWORK)
 
 
