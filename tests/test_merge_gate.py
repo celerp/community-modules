@@ -134,6 +134,12 @@ class Refuses(Gate):
         self.pr["author_association"] = "OWNER"
         self.assertEqual(self.run_gate(), [])
 
+    def test_code_owner_pull_request(self):
+        self.pr["author_association"] = "CONTRIBUTOR"
+        self.pr["user"] = {"login": "Lead"}
+        handle(self.event, REPO, self.gh, maintainers={"lead"})
+        self.assertEqual(self.gh.writes, [])
+
     def test_base_branch_not_default(self):
         self.pr["base"] = {"ref": "dev"}
         self.assertEqual(self.run_gate(), [])

@@ -107,6 +107,12 @@ class Maintainer(Case):
         result = self.run_review()
         self.assertEqual(result.status, "maintainer")
 
+    def test_code_owner_is_left_for_review(self):
+        result = review(base=BASE, head=self.head, changed=self.changed, author="Lead",
+                        association="CONTRIBUTOR", gh=self.gh, lint=no_lint,
+                        maintainers={"lead"})
+        self.assertEqual(result.status, "maintainer")
+
 
 class Scope(Case):
     def test_other_file_changed(self):

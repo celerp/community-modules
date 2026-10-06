@@ -24,7 +24,7 @@ import sys
 import zipfile
 
 from github_api import ApiError, GitHub
-from listing import LISTING_FILES, MAINTAINER_ROLES
+from listing import CODEOWNERS, LISTING_FILES, code_owners, is_maintainer
 
 FLAG_LABEL = "needs-review"
 MARKER = "<!-- listing-check -->"
@@ -76,11 +76,13 @@ def _upsert_comment(gh, base: str, number: int, text: str) -> None:
     gh.post(f"{base}/issues/{number}/comments", {"body": body})
 
 
-def _handle_pr(gh, base: str, default: str, number: int, run: dict) -> None:
+def _handle_pr(gh, base: str, default: str, number: int, run: dict,
+               maintainers: set[str]) -> None:
     pr = gh.get(f"{base}/pulls/{number}")
     head = run["head_sha"]
     if (pr.get("state") != "open" or pr["base"]["ref"] != default
-            or pr.get("author_association") in MAINTAINER_ROLES or pr["head"]["sha"] != head):
+            or is_maintainer(pr["user"]["login"], pr.get("author_association", ""), maintainers)
+            or pr["head"]["sha"] != head):
         return
     names = set()
     for f in gh.paged(f"{base}/pulls/{number}/files?per_page=100"):
@@ -120,7 +122,8 @@ def _handle_pr(gh, base: str, default: str, number: int, run: dict) -> None:
         _upsert_comment(gh, base, number, NOT_MERGED)
 
 
-def handle(event: dict, repo: str, gh) -> None:
+def handle(event: dict, repo: str, gh, maintainers: set[str] = frozenset()) -> None:
+    """maintainers: the lowercased logins in the default branch's CODEOWNERS."""
     run = event.get("workflow_run") or {}
     if run.get("event") != "pull_request" or run.get("path") != CHECK_WORKFLOW:
         return
@@ -128,12 +131,14 @@ def handle(event: dict, repo: str, gh) -> None:
     default = gh.get(base)["default_branch"]
     for pr in gh.paged(f"{base}/pulls?state=open&per_page=100"):
         if pr["head"]["sha"] == run["head_sha"]:
-            _handle_pr(gh, base, default, pr["number"], run)
+            _handle_pr(gh, base, default, pr["number"], run, maintainers)
 
 
 def main() -> int:
     event = json.loads(pathlib.Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
-    handle(event, os.environ["GITHUB_REPOSITORY"], GitHub())
+    owners = code_owners((pathlib.Path(__file__).resolve().parents[1] / CODEOWNERS)
+                         .read_text(encoding="utf-8"))
+    handle(event, os.environ["GITHUB_REPOSITORY"], GitHub(), owners)
     return 0
 
 

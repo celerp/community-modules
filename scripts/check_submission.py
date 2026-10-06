@@ -37,7 +37,7 @@ from dataclasses import dataclass, field
 
 from gen_readme import regenerate
 from github_api import ApiError, GitHub, NotFound, TooLarge
-from listing import LISTING_FILES, MAINTAINER_ROLES
+from listing import CODEOWNERS, LISTING_FILES, code_owners, is_maintainer
 from scan_module import KINDS, scan_folder
 from validate_index import check as validate
 
@@ -322,9 +322,10 @@ def _flags(entry: dict, files: dict[str, bytes]) -> list[str]:
 # ── the whole review ─────────────────────────────────────────────────────────
 
 def review(*, base: dict, head: dict, changed: list[str], author: str, association: str,
-           gh, lint) -> Result:
-    """Check a listing pull request. base/head map file names to their text."""
-    if association in MAINTAINER_ROLES:
+           gh, lint, maintainers: set[str] = frozenset()) -> Result:
+    """Check a listing pull request. base/head map file names to their text;
+    maintainers are the lowercased logins in the base CODEOWNERS."""
+    if is_maintainer(author, association, maintainers):
         return Result("maintainer")
     problems = _scope_problems(changed)
     entry_id = None
@@ -440,10 +441,11 @@ def main() -> int:
         changed = _git("diff", "--name-only", "--no-renames", "HEAD^1", "HEAD").split()
         base = {f: _git("show", f"HEAD^1:{f}") for f in LISTING_FILES}
         head = {f: (ROOT / f).read_text(encoding="utf-8") for f in LISTING_FILES}
+        owners = code_owners(_git("show", f"HEAD^1:{CODEOWNERS}"))
         gh = GitHub()
         result = review(base=base, head=head, changed=changed, author=pr["user"]["login"],
                         association=pr.get("author_association", ""), gh=gh,
-                        lint=template_lint(gh))
+                        lint=template_lint(gh), maintainers=owners)
     except Exception as exc:  # fail closed: any error is a failed check
         result = Result("fail", [f"The check could not finish ({_q(type(exc).__name__)}). "
                                  "Push a new commit (an empty one is fine) to run it again."])

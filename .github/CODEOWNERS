@@ -1,3 +1,5 @@
-# Auto-requests a review from the maintainer on every PR (notification only;
-# code-owner review is not required to merge, so this never blocks a listing).
+# The maintainers of this directory. Auto-requests their review on every PR
+# (notification only; code-owner review is not required to merge). The listing
+# check and merge workflow also read this file: a pull request from anyone
+# named here is reviewed and merged by hand, never merged automatically.
 * @ngsevers
