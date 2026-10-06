@@ -279,7 +279,10 @@ class Network(unittest.TestCase):
                  {"network"}),
                 ("static/a.js", "var u = '//x&#46;example/a';\n", set()),
                 ("static/a.css", "a{background:url(//x&#46;example/a)}\n", set()),
-                ("static/a.css", "a{background:url('//x\\x2eexample/a')}\n", set())):
+                ("static/a.css", "a{background:u\\72l(//x\\2e example/a)}\n", {"network"}),
+                ("static/a.css", "a{background:url('//x\\x2eexample/a')}\n", set()),
+                # A regular expression literal is not a string: its escapes stay as written.
+                ("static/a.js", "s = s.replace(/\\t/g,opts.tabReplace);\n", set())):
             with self.subTest(text=text):
                 files = py("x = 1\n")
                 files[name] = text
@@ -289,6 +292,11 @@ class Network(unittest.TestCase):
                     "S = '<script>u = \"//x\\\\x2eexample/a\"</script>'\n"):
             with self.subTest(src=src):
                 self.assertEqual(kinds(py(src)), {"network"})
+        # Script and style escapes are read inside their strings and url(), so a Python
+        # regular expression is not read as either.
+        for src in ("P = '//.*\\\\n'\n", "P = '[^/\\\\\\\\]+-[^/\\\\\\\\]+\\\\.dist-info/'\n"):
+            with self.subTest(src=src):
+                self.assertEqual(kinds(py(src)), set())
 
     def test_percent_decoded_as_far_as_a_browser_does(self):
         # A browser decodes %XX once; only a % that folding then makes (from a fullwidth
