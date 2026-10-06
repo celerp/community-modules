@@ -196,6 +196,32 @@ class Network(unittest.TestCase):
                 files[path] = text
                 self.assertEqual(kinds(files), {"network"})
 
+    def test_scheme_as_a_browser_reads_it(self):
+        # Browsers drop tab and newline anywhere in an address and read \ after the scheme as /.
+        for name, src in {
+            "tab in the scheme": "U = 'ht\\ttps://x.example/a'\n",
+            "newline in the scheme": "U = 'htt\\nps://x.example/a'\n",
+            "backslashes after the scheme": "U = 'https:\\\\\\\\x.example/a'\n",
+            "slash and backslash after the scheme": "U = 'https:/\\\\x.example/a'\n",
+            "tab between the slashes": "U = '/\\t/x.example/a'\n",
+        }.items():
+            with self.subTest(name):
+                self.assertEqual(kinds(py(src)), {"network"})
+        for path, text in {"static/tab.html": "<script src=\"ht\ttps://x.example/a.js\"></script>\n",
+                           "static/back.js": "new Image().src = 'https:\\\\x.example/p';\n"}.items():
+            with self.subTest(path):
+                files = py("x = 1\n")
+                files[path] = text
+                self.assertEqual(kinds(files), {"network"})
+
+    def test_line_break_still_ends_a_word(self):
+        # Dropping a line break must not hide a call that starts the next line.
+        for src, found in {"s = '// load\\nfetch(u)'\n": {"network"},
+                           "s = 'see\\n//cdn.example/a.js'\n": {"network"},
+                           "s = 'x = 1\\neval(y)'\n": {"dynamic_code"}}.items():
+            with self.subTest(src=src):
+                self.assertEqual(kinds(py(src)), found)
+
     def test_double_slash_text_is_not_an_address(self):
         for src in ("U = '/api/foo'\n", "s = 'a // b'\n", "s = '//'\n",
                     "def f(root, name):\n    return root + '//' + name\n",
