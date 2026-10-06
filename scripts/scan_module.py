@@ -19,8 +19,8 @@ address counts with a scheme (`https://host/...`). One without a scheme
 or colon with more of the host after it; a single word such as `//name/` does
 not. Text is read the way a browser reads an address. Escapes are decoded in the
 language the text is written in (character references such as `&#46;` in markup,
-`\\x2e` in script strings, `\\2e` in style sheet strings and `url()`, all three
-in strings built in Python), then tab and newline characters are dropped (and,
+`\\x2e` in script, `\\2e` in style sheet strings and `url()`, all three in
+strings built in Python), then tab and newline characters are dropped (and,
 separately, read as a space between two addresses), backslashes read as slashes,
 look-alike characters folded, characters IDNA ignores dropped and
 percent-encoding decoded as far as a browser decodes it, before the text is
