@@ -285,13 +285,13 @@ def _module_problems(entry: dict, files: dict[str, bytes], lint) -> tuple[dict, 
 
 
 def _flags(entry: dict, files: dict[str, bytes]) -> list[str]:
-    declares_network = not NO_NETWORK.match(entry["network_calls"])
+    says_none = NO_NETWORK.match(entry["network_calls"])
     flags = []
     for f in sorted(scan_folder(files), key=lambda f: (f.path, f.line, f.kind)):
-        if f.kind == "network" and declares_network:
-            continue
-        if f.kind == "network":
+        if f.kind == "network" and says_none:
             why = "network_calls in your entry says it makes none"
+        elif f.kind == "network":
+            why = "a maintainer reviews every network call"
         elif f.kind == "files":
             why = "a module keeps its files in Celerp's data folder (settings.data_dir)"
         else:
@@ -376,8 +376,7 @@ def comment(result: Result) -> str:
     if result.status == "flag":
         return ("## Listing check: waiting for the maintainer\n\n"
                 "Every required check passed, but the module's code does the things below, "
-                "which its entry does not declare or which a maintainer always reviews. A "
-                "maintainer will review it before it is listed. If your entry should declare "
+                "which a maintainer reviews before it is listed. If your entry should declare "
                 "something (for example a network call in network_calls), update it and push "
                 "a new commit; otherwise nothing is needed from you.\n\n"
                 + _bullets(result.flags) + "\n")

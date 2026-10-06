@@ -14,9 +14,10 @@ Python is read with `ast`, names are resolved through the file's own imports,
 so `import os as o; o.system(...)` is seen as `os.system`. Where the scan cannot
 follow a name (a module such as `os` stored or passed as a value, an attribute
 name built at runtime) it reports that instead, as it does code that changes
-names in modules Python, Celerp or its libraries provide. It is a heuristic: it
-reports the ordinary ways of doing these things, not every way code can hide
-them. Test files are left out unless the module's own code imports them.
+names in modules Python, Celerp or its libraries provide. It is a review aid,
+not a security boundary: it reports the ordinary ways of doing these things, not
+every way Python can reach a name, and a clean scan is not proof of what the
+code does. Test files are left out unless the module's own code imports them.
 """
 from __future__ import annotations
 
@@ -62,9 +63,6 @@ NETWORK = (
 HTTPX_CALLS = {f"httpx.{n}" for n in (
     "Client", "AsyncClient", "get", "post", "put", "patch", "delete", "head", "options",
     "request", "stream")}
-# The only base_url a module may give an httpx client without it counting as a
-# network call: Celerp's own API, which the UI layer calls for every page.
-OWN_API = "ui.config.API_BASE"
 PROCESS = (
     "subprocess", "multiprocessing", "pty", "signal", "os.system", "os.popen", "os.fork",
     "os.forkpty", "os.kill", "os.killpg", "os.startfile", "os.posix_spawn", "os.posix_spawnp",
@@ -451,28 +449,6 @@ class _File:
                     and self._safe_parts(node.values[1:]))
         return False
 
-    def own_client(self, node: ast.AST, scope: _Scope, seen: frozenset = frozenset()) -> bool:
-        """True when an expression is an httpx client for Celerp's own API (OWN_API)."""
-        if isinstance(node, ast.Name):
-            owner, binds = scope.lookup(node.id)
-            if binds is None or (node.id, id(owner)) in seen:
-                return False
-            seen = seen | {(node.id, id(owner))}
-            return all(k == "value" and v is not None and self.own_client(v, owner, seen)
-                       for k, v in binds)
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            inner = self.scopes.get(id(node.body[0]))
-            returns = [r.value for r in _own_returns(node)]
-            return bool(returns) and None not in returns and all(
-                self.own_client(r, inner, seen) for r in returns)
-        if not isinstance(node, ast.Call):
-            return False
-        name = self.resolve(node.func, scope)
-        if name in ("httpx.Client", "httpx.AsyncClient"):
-            base = next((k.value for k in node.keywords if k.arg == "base_url"), None)
-            return base is not None and self.resolve(base, scope) == OWN_API
-        return isinstance(node.func, ast.Name) and self.own_client(node.func, scope, seen)
-
     def archive(self, node: ast.AST, scope: _Scope, seen: frozenset = frozenset()) -> bool:
         """True when an expression can be a zip or tar archive object."""
         if isinstance(node, ast.Name):
@@ -617,8 +593,6 @@ class _File:
         for name in names:
             if _reserved(name.split(".")[0]):
                 self.add("dynamic_code", node, f"changes a name in {name}, which other code uses")
-        if not names and self.own_client(obj, scope):
-            self.add("network", node, "changes Celerp's own API client")
 
     def check_call(self, node: ast.Call, scope: _Scope) -> None:
         if (isinstance(node.func, ast.Attribute) and node.func.attr in ARCHIVE_PATHS
@@ -646,10 +620,9 @@ class _File:
         if name in NAMED_ATTRIBUTE:
             names = node.args[NAMED_ATTRIBUTE[name]]
             computed = not names or any(self.attr_names(a, scope) is None for a in names)
-            # A request method picked by name on Celerp's own API client stays an API call.
-            if computed and not (name == "getattr" and self.own_client(node.args[0], scope)):
+            if computed:
                 self.add("dynamic_code", node, f"{name} with a computed name")
-        if name in HTTPX_CALLS and not self.own_client(node, scope):
+        if name in HTTPX_CALLS:
             self.add("network", node, name)
         if _matches(name, FILE_CALLS):
             args = [*node.args, *(k.value for k in node.keywords if k.arg in PATH_KWARGS)]
@@ -691,15 +664,6 @@ def _type_nodes(node):
         value = getattr(node, field)
         for child in value if isinstance(value, list) else [value]:
             yield from _type_nodes(child)
-
-
-def _own_returns(func: ast.AST):
-    """The return statements of a function, not of the functions nested in it."""
-    for child in ast.iter_child_nodes(func):
-        if isinstance(child, ast.Return):
-            yield child
-        elif not isinstance(child, _SCOPE_NODES):
-            yield from _own_returns(child)
 
 
 def _outside(node: ast.AST, child: ast.AST) -> bool:

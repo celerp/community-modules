@@ -124,16 +124,23 @@ programs, running code built or loaded at runtime, reading environment
 variables, credentials or Celerp's secret settings, and file access outside
 Celerp's data folder (`settings.data_dir`). It also checks that the routes, slot
 handlers, migrations and locale files your manifest names are your module's own
-package and files. Network calls your `network_calls`
-declares are fine. Anything else it finds is **flagged**: the pull request gets
-the `needs-review` label and waits for the maintainer. Code the scan cannot
-follow, such as a module like `os` stored in a variable or an attribute name
-built while the code runs, is flagged too, and so is code that changes names in
-modules Python, Celerp or its libraries provide.
+package and files. Calls to Celerp's module API (`celerp.modules.api`, such as
+`api_request`) are not findings. Anything the scan finds is **flagged**: the
+pull request gets the `needs-review` label and waits for the maintainer. A
+network call is flagged whatever `network_calls` says; that field is your
+disclosure, shown on your listing, and when it says "None" while the scan sees
+networking, the comment points out the mismatch. Code the scan cannot follow,
+such as a module like `os` stored in a variable or an attribute name built while
+the code runs, is flagged too, and so is code that changes names in modules
+Python, Celerp or its libraries provide.
 
-The scan reads the code without running it. It is a heuristic: it catches the
-ordinary ways of doing these things, but code written to hide from it can get
-past, so a passed check is not proof that a module does only what it declares.
+The scan is a review aid, not a security boundary. It reads the code without
+running it and catches the ordinary ways of doing these things. It does not
+follow every way Python can reach a name, for example through attributes of
+other objects, private names inside standard modules, or binding orders Python
+resolves differently than the scan reads them, so a passed check is not proof
+that a module does only what it declares. Anything it cannot follow is left to
+a human reviewer.
 
 ### What happens next
 
