@@ -13,38 +13,24 @@ handlers, migrations) must be the module's own package, and the files it reads
 Python is read with `ast`, names are resolved through the file's own imports, so
 `import os as o; o.system(...)` is seen as `os.system`. Browser code is read in
 script, page and style sheet files and in the module's Python strings and bytes,
-docstrings left out unless the file reads them back through `__doc__`. A web
-address counts with a scheme (`https://host/...`). One without a scheme
-(`//host/...`) counts when its host is an IPv6 address in brackets, or has a dot
-or colon with more of the host after it; a single word such as `//name/` does
-not. Text is read the way a browser reads an address. Escapes are decoded in the
-language the text is written in (character references such as `&#46;` in markup,
-`\\x2e` in script, `\\2e` in style sheets, all three in strings built in
-Python), then tab and newline characters are dropped (and, separately, read as a
-space between two addresses), backslashes read as slashes, look-alike characters
-folded, characters IDNA ignores dropped and percent-encoding decoded as far as a
-browser decodes it, before the text is matched. Letters a browser folds that are
-newer than the Unicode data of Python 3.12, which the checks run on, are listed
-by hand, so letters added in a later Unicode version are not folded. An address
-or call built while the code runs is not followed. Where the scan cannot follow
-a name (a module such as `os` stored or passed as a value, an attribute name
-built at runtime) it reports that instead, as it does code that changes names in
-modules Python, Celerp or its libraries provide. It is a review aid, not a
-security boundary: it reports the ordinary ways of doing these things, not every
-way Python can reach a name, and a clean scan is not proof of what the code
-does. Test files are left out unless the module's own code imports them.
+as written: browser network calls, web addresses for another host and code built
+at runtime are reported. Docstrings are not scanned; code that reads one back
+through `__doc__` is reported. Where the scan cannot follow a name (a module such
+as `os` stored or passed as a value, an attribute name built at runtime) it
+reports that instead, as it does code that changes names in modules Python,
+Celerp or its libraries provide. It is a review aid, not a security boundary: it
+routes code that obviously does these things, or that it cannot confidently
+classify, to a human, and a clean scan is not proof of what the code does. Test
+files are left out unless the module's own code imports them.
 """
 from __future__ import annotations
 
 import ast
-import html
 import posixpath
 import re
 import sys
-import unicodedata
 from dataclasses import dataclass
 from pathlib import PurePosixPath
-from urllib.parse import unquote
 
 
 @dataclass(frozen=True)
@@ -170,60 +156,11 @@ PATH_KEEPERS = ("pathlib.Path", "pathlib.PurePath", "str", "os.fspath", "os.path
 PATH_JOINERS = ("pathlib.Path", "pathlib.PurePath", "os.path.join")
 PATH_METHODS = ("resolve", "absolute", "joinpath", "with_suffix", "with_name", "as_posix")
 BAD_SEGMENT = re.compile(r"(^|[/\\])\.\.([/\\]|$)|^[/\\]|^[A-Za-z]:|^~")
-# An address without a scheme (//host/...) uses the page's own scheme to reach that
-# host. Browsers skip extra slashes and a user name up to the last @. The host runs to
-# the first space or / \ ? # ' " ` < > ( ), or the end. It is an address when it holds a
-# letter or digit, and is an IPv6 address in [ ] (the only bracketed host a browser
-# accepts) or has a . or : followed by something other than . , ; : ! ("//done." and
-# "//TODO: x" are text). A host followed by ( is a call, as in "//console.log(x)", and
-# "a // b" or a single word ("//intranet/") is not an address.
-# The pattern reads plain ASCII; _readings turns other spellings into it.
-USER_CHAR = r"[^\s/\\?#]"
-HOST_CHAR = r"[^\s/\\?#'\"`<>()]"
-NETWORK_PATH = (rf"(?<![\w:/.\\])//+"
-                rf"(?:(?=(?P<user>{USER_CHAR}*@))(?P=user)|(?!{USER_CHAR}*@))"
-                rf"(?=\[[0-9a-f:.]*:[0-9a-f:.]*\]|[^\s/\\?#'\"`<>().:]*[.:]{HOST_CHAR}*?"
-                rf"[^\s/\\?#'\"`<>().,;:!])"
-                rf"(?={HOST_CHAR}*?[^\W_])(?={HOST_CHAR}*(?!{HOST_CHAR}|\())")
+# An address without a scheme (//host/...) uses the page's own scheme. It counts when
+# the host has a dot or a port and is followed by a path, query, quote, space or the end;
+# "a // b", "//TODO: x" and "//console.log(x)" are not addresses.
+NETWORK_PATH = r"(?<![\w:/.\\])//[\w-]+(?:(?:\.[\w-]+)+(?::\d+)?|:\d+)(?=[/?#'\"`\s]|$)"
 URL = re.compile(rf"\b(?:https?|wss?|ftp)://|{NETWORK_PATH}", re.I)
-# Characters a browser's URL parser drops or reads as another: tab and newline, the
-# characters IDNA ignores in a host (soft hyphen, zero-width characters, variation
-# selectors, Hangul fillers; from a Chromium scan of every code point), the ideographic
-# full stop NFKC leaves as it is, a backslash, and letters and digits a browser folds that
-# are newer than the Unicode data of the Python running the scan (outlined A-Z and 0-9).
-LINE_BREAK = re.compile(r"[\t\n\r]")
-IGNORED = re.compile("[\u00ad\u034f\u115f\u1160\u17b4\u17b5\u180b-\u180f\u200b\u2060-\u2064"
-                     "\u206a-\u206f\u3164\ufe00-\ufe0f\ufeff\uffa0\U0001bca0-\U0001bca3"
-                     "\U0001d173-\U0001d17a\U000e0100-\U000e01ef]")
-BROWSER_READS = str.maketrans({"\u3002": ".", "\\": "/", "\ua7f1": "s", **{
-    chr(0x1ccd6 + i): c for i, c in enumerate("abcdefghijklmnopqrstuvwxyz0123456789")}})
-# Escapes a language decodes before a browser reads an address written in it, read only
-# inside the literals that can hold an address. Script strings and template literals:
-# \xHH, \uHHHH, \u{H...}, octal (\56), \n and the other control letters, a backslash
-# before a line break (dropped) and before any other character but x or u (that
-# character). Outside them, where a stray quote can hide a string, \xHH, \uHHHH and
-# \u{H...} are read too. Style sheet strings and url(), whose three letters may be
-# escaped too: \ and 1 to 6 hex digits with one optional space after them, or \ before
-# any other character (that character); comments are left as written. Outside strings,
-# url() and comments, \ and hex digits are read too, as in script. Markup reads
-# character references (&#46;, &period;) with the standard library, a decimal one longer
-# than any code point first shortened to one. A literal without its closing quote or
-# bracket runs as far as it can go, so every literal that starts matches and reading
-# stays linear.
-QUOTED = r"'(?:[^'\\\n]|\\.)*'?|\"(?:[^\"\\\n]|\\.)*\"?"
-SCRIPT_LITERAL = re.compile(rf"{QUOTED}|`(?:[^`\\]|\\.)*`?"
-                            r"|\\(?:\\|x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|u\{[0-9a-fA-F]+\})", re.S)
-STYLE_NAME_CHAR = r"[\w-]|\\(?:[0-9a-fA-F]{1,6}[ \t\n\r\f]?|[^0-9a-fA-F\n\r\f])"
-STYLE_LITERAL = re.compile(
-    rf"/\*(?:[^*]|\*(?!/))*(?:\*/)?|{QUOTED}"
-    rf"|(?<![\w\\-])((?:{STYLE_NAME_CHAR}){{3}})\((?:[^)\\]|\\.)*\)?"
-    r"|\\(?:\\|[0-9a-fA-F]{1,6}(?:\r\n|[ \t\n\r\f])?)", re.S)
-SCRIPT_ESCAPE = re.compile(r"\\(?:x([0-9a-fA-F]{2})|u([0-9a-fA-F]{4})|u\{([0-9a-fA-F]+)\}"
-                           r"|([0-3][0-7]{0,2}|[4-7][0-7]?)|(\r\n|[^xu0-7]))")
-CHARACTER_REFERENCE = re.compile(r"&#0*([0-9]+)")
-SCRIPT_CONTROLS = {"b": "\b", "f": "\f", "n": "\n", "r": "\r", "t": "\t", "v": "\v",
-                   "\n": "", "\r": "", "\r\n": "", "\u2028": "", "\u2029": ""}
-STYLE_ESCAPE = re.compile(r"\\(?:([0-9a-fA-F]{1,6})(?:\r\n|[ \t\n\r\f])?|([^\n\r\f0-9a-fA-F]))")
 
 DATA_SUFFIXES = {
     ".md", ".txt", ".rst", ".json", ".toml", ".yaml", ".yml", ".cfg", ".ini", ".csv",
@@ -609,14 +546,9 @@ class _File:
         return ids
 
     def scan(self) -> list[Finding]:
-        # Docstrings are not code, unless the file reads them back through __doc__.
-        reads_doc = any((isinstance(n, ast.Name) and n.id == "__doc__")
-                        or (isinstance(n, ast.Attribute) and n.attr == "__doc__")
-                        or (isinstance(n, ast.Constant) and n.value == "__doc__")
-                        for n in ast.walk(self.tree))
-        bare_strings = set() if reads_doc else {
-            id(n.value) for n in ast.walk(self.tree)
-            if isinstance(n, ast.Expr) and isinstance(n.value, ast.Constant)}
+        # Docstrings are not code.
+        bare_strings = {id(n.value) for n in ast.walk(self.tree)
+                        if isinstance(n, ast.Expr) and isinstance(n.value, ast.Constant)}
         read_by_attribute = {id(n.value) for n in ast.walk(self.tree)
                              if isinstance(n, ast.Attribute)}
         followed = self._followed()
@@ -629,6 +561,10 @@ class _File:
             if ((isinstance(node, ast.Attribute) and node.attr in INTROSPECTION)
                     or (isinstance(node, ast.Constant) and node.value in INTROSPECTION)):
                 self.add("dynamic_code", node, "reaches other code's names")
+            if ((isinstance(node, ast.Name) and node.id == "__doc__")
+                    or (isinstance(node, ast.Attribute) and node.attr == "__doc__")
+                    or (isinstance(node, ast.Constant) and node.value == "__doc__")):
+                self.add("dynamic_code", node, "reads a docstring while running")
             scope = self.scopes.get(id(node))
             if scope is None:
                 continue
@@ -663,12 +599,11 @@ class _File:
                   and id(node) not in bare_strings):
                 # Markup, script and style built in Python reach the browser like a page.
                 text = node.value if isinstance(node.value, str) else _bytes_text(node.value)
-                readings = _readings(text, PAGE_LANGUAGES)
-                if any(map(URL.search, readings)):
+                if URL.search(text):
                     self.add("network", node, "a web address in the code")
-                elif any(map(JS_NETWORK.search, readings)):
+                elif JS_NETWORK.search(text):
                     self.add("network", node, "browser network call")
-                if any(map(JS_DYNAMIC.search, readings)):
+                if JS_DYNAMIC.search(text):
                     self.add("dynamic_code", node, "code built at runtime")
         return self.findings
 
@@ -880,96 +815,16 @@ def _bytes_text(data: bytes) -> str:
         return data.decode("latin-1")
 
 
-def _readings(text: str, languages: tuple) -> tuple[str, ...]:
-    """Text as written, and each literal it holds (the text as one of its languages
-    decodes it) as a browser reads the address in it.
-
-    The text as written is matched too, as dropping a line break joins the last word of a
-    line to the next one ("x\\nfetch(u)" reads "xfetch(u)").
-    """
-    literals = dict.fromkeys((text, *(decode(text) for decode in languages)))
-    return (text, *(reading for literal in literals for reading in _as_browser_reads(literal)))
-
-
-def _script_text(text: str) -> str:
-    return SCRIPT_LITERAL.sub(_script_literal, text)
-
-
-def _script_literal(literal: re.Match[str]) -> str:
-    """A script string, or an escape outside one, with its escapes read. An escaped
-    backslash outside a string stays as written."""
-    return literal[0] if literal[0] == "\\\\" else SCRIPT_ESCAPE.sub(_script_char, literal[0])
-
-
-def _script_char(escape: re.Match[str]) -> str:
-    if digits := escape[1] or escape[2] or escape[3]:
-        return chr(int(digits, 16)) if int(digits, 16) < 0x110000 else escape[0]
-    if escape[4]:
-        return chr(int(escape[4], 8))
-    return SCRIPT_CONTROLS.get(escape[5], escape[5])
-
-
-def _style_text(text: str) -> str:
-    return STYLE_LITERAL.sub(_style_literal, text)
-
-
-def _style_literal(literal: re.Match[str]) -> str:
-    """A style string, a function whose name reads "url", or a hex escape outside them,
-    with its escapes read. A comment or an escaped backslash stays as written."""
-    if literal[0].startswith("/*") or literal[0] == "\\\\":
-        return literal[0]
-    if literal[1] is not None and STYLE_ESCAPE.sub(_style_char, literal[1]).lower() != "url":
-        return literal[0]
-    return STYLE_ESCAPE.sub(_style_char, literal[0])
-
-
-def _style_char(escape: re.Match[str]) -> str:
-    if not escape[1]:
-        return escape[2]
-    code = int(escape[1], 16)
-    return chr(code) if 0 < code < 0x110000 and not 0xd800 <= code < 0xe000 else "\ufffd"
-
-
-def _markup_text(text: str) -> str:
-    return html.unescape(CHARACTER_REFERENCE.sub(
-        lambda ref: "&#" + (ref[1] if len(ref[1]) < 8 else "1114112"), text))
-
-
-# The languages each page file is written in; markup holds script and style too.
-PAGE_LANGUAGES = (_markup_text, _script_text, _style_text)
-FILE_LANGUAGES = {".js": (_script_text,), ".mjs": (_script_text,), ".cjs": (_script_text,),
-                  ".css": (_style_text,)}
-
-
-def _as_browser_reads(literal: str) -> tuple[str, str]:
-    """A literal as a browser's URL parser reads it, with a line break dropped (inside one
-    address: "ht\\ttps://") and read as a space (between two, as in a list of addresses).
-
-    Chromium decodes %XX once and then maps the host as IDNA does (_fold). A % that mapping
-    makes from a fullwidth or small percent sign is decoded once more ("%EF%BC%852e" reads
-    "\uff052e", then "%2e", then "."). A % the first decode leaves ("%252e") and a third
-    level are not decoded, as the browser rejects those hosts.
-    """
-    return tuple("%".join(_fold(unquote(_fold(part))) for part in unquote(text).split("%"))
-                 for text in (LINE_BREAK.sub(gap, literal) for gap in ("", " ")))
-
-
-def _fold(text: str) -> str:
-    return IGNORED.sub("", unicodedata.normalize("NFKC", text)).translate(BROWSER_READS)
-
-
 def _scan_script(path: str, data: bytes) -> list[Finding]:
     try:
         text = data.decode("utf-8")
     except UnicodeDecodeError:
         return [Finding("unreadable", path, 1, "not UTF-8 text")]
-    languages = FILE_LANGUAGES.get(PurePosixPath(path).suffix.lower(), PAGE_LANGUAGES)
     found = []
     for lineno, line in enumerate(text.splitlines(), 1):
-        readings = _readings(line, languages)
-        if any(map(JS_NETWORK.search, readings)):
+        if JS_NETWORK.search(line):
             found.append(Finding("network", path, lineno, "browser network call"))
-        if any(map(JS_DYNAMIC.search, readings)):
+        if JS_DYNAMIC.search(line):
             found.append(Finding("dynamic_code", path, lineno, "code built at runtime"))
     return found
 

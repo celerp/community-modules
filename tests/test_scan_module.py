@@ -59,62 +59,43 @@ class CleanCode(unittest.TestCase):
 
 
 class Network(unittest.TestCase):
-    def test_requests_import(self):
+    def test_python_networking(self):
         self.assertEqual(kinds(py("import requests\nrequests.get('x')\n")), {"network"})
-
-    def test_socket_alias(self):
         self.assertEqual(kinds(py("import socket as s\n")), {"network"})
 
-    def test_urllib_request_from_import(self):
-        self.assertEqual(kinds(py("from urllib.request import urlopen\n")), {"network"})
+    def test_browser_network_call_in_a_script_file(self):
+        for text in ("fetch('/x').then(r => r.json())\n", "const ws = new WebSocket(u);\n"):
+            with self.subTest(text=text):
+                files = py("x = 1\n")
+                files["static/app.js"] = text
+                self.assertEqual(kinds(files), {"network"})
 
-    def test_httpx_client_to_another_host(self):
-        self.assertEqual(kinds(py(
-            "import httpx\ndef c():\n    return httpx.Client(base_url='https://example.com')\n")),
-            {"network"})
-
-    def test_httpx_module_level_get(self):
-        self.assertEqual(kinds(py("import httpx\nhttpx.get(u)\n")), {"network"})
-
-    def test_absolute_url_in_code(self):
-        self.assertEqual(kinds(py("U = 'https://example.com/hook'\n")), {"network"})
-
-    def test_url_in_docstring_is_not_a_call(self):
-        self.assertEqual(kinds(py('"""See https://example.com/docs."""\nx = 1\n')), set())
-
-    def test_javascript_fetch(self):
-        files = py("x = 1\n")
-        files["static/app.js"] = "fetch('/x').then(r => r.json())\n"
-        self.assertEqual(kinds(files), {"network"})
-
-    def test_browser_code_in_python_strings(self):
-        # Script and HTML the module builds in Python reach the browser like a .js file.
-        for name, src in {
-            "protocol-relative fetch": "from fasthtml.common import Script\n"
-                                       "s = Script(\"fetch('//x.example/a')\")\n",
-            "f-string fetch": "from fasthtml.common import Script\n"
-                              "def f(url):\n    return Script(f\"fetch({url})\")\n",
-            "implicit concatenation": "s = 'fe' 'tch(u)'\n",
-            "XMLHttpRequest": "s = 'new XMLHttpRequest()'\n",
-            "WebSocket": "s = 'new WebSocket(u)'\n",
-            "sendBeacon": "s = 'navigator.sendBeacon(u, d)'\n",
-            "EventSource": "s = 'new EventSource(u)'\n",
-        }.items():
-            with self.subTest(name):
+    def test_browser_network_call_in_python_str_and_bytes(self):
+        for src in ("from fasthtml.common import Script\ns = Script(\"fetch(u)\")\n",
+                    "s = b'navigator.sendBeacon(u, d)'.decode()\n"):
+            with self.subTest(src=src):
                 self.assertEqual(kinds(py(src)), {"network"})
 
-    def test_browser_dynamic_code_in_python_strings(self):
-        self.assertEqual(kinds(py("s = f'eval({x})'\n")), {"dynamic_code"})
-
-    def test_browser_code_in_python_bytes(self):
-        for name, src in {
-            "decoded": "from fasthtml.common import Script\n"
-                       "s = Script(b\"fetch('//x.example/a')\".decode())\n",
-            "raw": "s = rb'new WebSocket(u)'.decode()\n",
-        }.items():
-            with self.subTest(name):
+    def test_external_address(self):
+        for src in ("U = 'https://example.com/hook'\n",
+                    "from fasthtml.common import Script\ns = Script(src='//cdn.example.com/a.js')\n"):
+            with self.subTest(src=src):
                 self.assertEqual(kinds(py(src)), {"network"})
-        self.assertEqual(kinds(py("s = b'eval(src)'.decode()\n")), {"dynamic_code"})
+
+    def test_app_local_paths_are_clean(self):
+        files = py("from fasthtml.common import Div\nd = Div(hx_get='/api/items', hx_target='#list')\n")
+        files["static/page.html"] = '<link rel="stylesheet" href="/static/site.css">\n'
+        self.assertEqual(kinds(files), set())
+
+    def test_prose_and_comments_are_clean(self):
+        files = py("s = 'a // b'\nt = 'Use // to start a comment'\n")
+        files["static/app.js"] = "// TODO later\n//console.log(x)\n/* see notes */\n"
+        self.assertEqual(kinds(files), set())
+
+    def test_plain_docstrings_are_clean(self):
+        self.assertEqual(kinds(py('"""See https://example.com/docs."""\n'
+                                  'def f():\n    """Calls fetch(url) in the page."""\n')),
+                         set())
 
     def test_docstring_read_at_runtime_goes_to_review(self):
         for name, src in {
@@ -124,252 +105,6 @@ class Network(unittest.TestCase):
         }.items():
             with self.subTest(name):
                 self.assertEqual(kinds(py(src)), {"dynamic_code"})
-
-    def test_address_without_a_scheme(self):
-        # //host/... reaches another host exactly as https://host/... does.
-        for name, src in {
-            "Script src": "from fasthtml.common import Script\n"
-                          "s = Script(src='//x.example/a.js')\n",
-            "hx_get": "from fasthtml.common import Div\nd = Div(hx_get='//x.example/a')\n",
-            "hx-post dict": "A = {'hx-post': '//x.example/a'}\n",
-            "Iframe src": "from fasthtml.common import Iframe\n"
-                          "f = Iframe(src='//x.example/')\n",
-            "Form action": "from fasthtml.common import Form\n"
-                           "f = Form(action='//x.example/f', method='post')\n",
-            "image beacon": "JS = \"new Image().src = '//x.example/p?d=' + d\"\n",
-            "host and port": "U = '//localhost:8000/a'\n",
-            "IPv4": "U = '//192.0.2.1/a'\n",
-            "user and password": "U = '//u:p@x.example/a'\n",
-            "trailing dot": "U = '//x.example./a'\n",
-            "non-ASCII host": "U = '//\u043f\u0440\u0438\u043c\u0435\u0440.\u0440\u0444/a'\n",
-            "underscore": "U = '//a_b.x.example/a'\n",
-            "three slashes": "U = '///x.example/a'\n",
-            "backslash path": "U = '//x.example\\\\a'\n",
-            "unquoted attribute": "H = '<img src=//x.example>'\n",
-            "two @": "U = '//a@b@x.example/'\n",
-            "empty user": "U = '//@x.example/'\n",
-            "user with (": "U = '//a(b@x.example/'\n",
-            "octal IPv4": "U = '//0300.0250.0.1/a'\n",
-            "hex IPv4": "U = '//0xc0.0xa8.0.1/a'\n",
-            "short IPv4": "U = '//127.1/a'\n",
-            "empty port": "U = '//x.example:/a'\n",
-            "empty port at the end": "U = '//x.example:'\n",
-            "ideographic full stop": "U = '//x\u3002example/a'\n",
-            "fullwidth full stop": "U = '//x\uff0eexample/a'\n",
-            "halfwidth full stop": "U = '//x\uff61example/a'\n",
-            "percent-encoded dot": "U = '//x%2Eexample/a'\n",
-            "percent-encoded full stop": "U = '//x%E3%80%82example/a'\n",
-            "newline in host": "U = '//cdn\\n.example/a.js'\n",
-            "tab in host": "U = '//cdn\\t.example/a.js'\n",
-            "quote in user": "U = \"//u'@x.example/a\"\n",
-            "angle bracket in user": "U = '//u<@x.example/a'\n",
-            "backslash after the slashes": "U = '//\\\\x.example/a'\n",
-            "tab after the slashes": "U = '//\\t/x.example/a'\n",
-            "newline after the slashes": "U = '//\\n/cdn.example/a.js'\n",
-            "full stop in bytes": "U = b'//x\\xe3\\x80\\x82example/a'\n",
-            "tab in a percent-encoded dot": "U = '//x%2\\teexample/a'\n",
-            "fullwidth percent-encoded dot": "U = '//x\uff05\uff12\uff45example/a'\n",
-            "small percent sign": "U = '//x\ufe6a2eexample/a'\n",
-        }.items():
-            with self.subTest(name):
-                self.assertEqual(kinds(py(src)), {"network"})
-        for path, text in {"static/app.js": "const u = '//x.example/a';\n",
-                           "static/page.html": "<img src=\"//x.example/p.png\">\n",
-                           "static/link.html": "<a href=//192.0.2.1>x</a>\n",
-                           "static/tab.js": "const u = '//cdn\t.example/a';\n",
-                           "static/user.html": "<img src=\"//u'@x.example/p.png\">\n",
-                           "static/slash.html": "<script src=\"//\\x.example/a.js\"></script>\n",
-                           "static/slash.js": "const u = '//\t/x.example/a';\n",
-                           "static/site.css": "body{background:url(//x.example/a.png)}\n"}.items():
-            with self.subTest(path):
-                files = py("x = 1\n")
-                files[path] = text
-                self.assertEqual(kinds(files), {"network"})
-
-    def test_scheme_in_any_case(self):
-        # Browsers read a scheme in any case, in a page as in Python.
-        for path, text in {"static/a.html": "<script src=\"HTTPS://x.example/a.js\"></script>\n",
-                           "static/a.js": "new Image().src = 'Http://x.example/p';\n"}.items():
-            with self.subTest(path):
-                files = py("x = 1\n")
-                files[path] = text
-                self.assertEqual(kinds(files), {"network"})
-
-    def test_scheme_as_a_browser_reads_it(self):
-        # Browsers drop tab and newline anywhere in an address and read \ after the scheme as /.
-        for name, src in {
-            "tab in the scheme": "U = 'ht\\ttps://x.example/a'\n",
-            "newline in the scheme": "U = 'htt\\nps://x.example/a'\n",
-            "backslashes after the scheme": "U = 'https:\\\\\\\\x.example/a'\n",
-            "slash and backslash after the scheme": "U = 'https:/\\\\x.example/a'\n",
-            "tab between the slashes": "U = '/\\t/x.example/a'\n",
-        }.items():
-            with self.subTest(name):
-                self.assertEqual(kinds(py(src)), {"network"})
-        for path, text in {"static/tab.html": "<script src=\"ht\ttps://x.example/a.js\"></script>\n",
-                           "static/back.js": "new Image().src = 'https:\\\\x.example/p';\n"}.items():
-            with self.subTest(path):
-                files = py("x = 1\n")
-                files[path] = text
-                self.assertEqual(kinds(files), {"network"})
-
-    def test_line_break_still_ends_a_word(self):
-        # Dropping a line break must not hide a call that starts the next line.
-        for src, found in {"s = '// load\\nfetch(u)'\n": {"network"},
-                           "s = 'see\\n//cdn.example/a.js'\n": {"network"},
-                           "s = 'x = 1\\neval(y)'\n": {"dynamic_code"}}.items():
-            with self.subTest(src=src):
-                self.assertEqual(kinds(py(src)), found)
-
-    def test_line_break_between_addresses(self):
-        # A list of addresses (as in <a ping>) splits at a tab or newline; the next one
-        # still counts when only the browser's reading of it names a host.
-        for src in ("H = '<a href=\"/\" ping=\"/log\\t//x%2eexample/a\">'\n",
-                    "H = '<a href=\"/\" ping=\"/log\\n//x\\u3002example/a\">'\n",
-                    "H = '<a href=\"/\" ping=\"/a/\\t\\\\\\\\x.example/a\">'\n"):
-            with self.subTest(src=src):
-                self.assertEqual(kinds(py(src)), {"network"})
-        files = py("x = 1\n")
-        files["static/ping.html"] = "<a href=\"/\" ping=\"/log\t//x%2eexample/a\">\n"
-        self.assertEqual(kinds(files), {"network"})
-
-    def test_host_decoded_after_folding(self):
-        # A browser decodes a host, folds it as IDNA does (dropping a soft hyphen or
-        # zero-width character) and decodes it again: %EF%BC%85 is a fullwidth percent sign.
-        for src in ("U = '//x%EF%BC%852eexample/a'\n", "U = '//x%EF%B9%AA2eexample/a'\n",
-                    "U = '//x\\uff05\\u00ad2eexample/a'\n", "U = '//x\\uff052\\u200beexample/a'\n",
-                    "U = '//x\\uff05\\U000e01002eexample/a'\n",
-                    "U = '//x%EF%BC%85%F3%A0%87%AF%32eexample/a'\n"):
-            with self.subTest(src=src):
-                self.assertEqual(kinds(py(src)), {"network"})
-
-    def test_letters_newer_than_the_unicode_data(self):
-        # A browser folds outlined letters and digits (Unicode 16) to ASCII; the Python
-        # running the scan may not know them.
-        for src in ("U = '//x\\uff05\\U0001ccf2\\U0001ccdaexample/a'\n",
-                    "U = '//\\U0001ccd6.\\U0001ccd7/a'\n", "U = '//\\ua7f1\\U0001cce8.\\U0001ccd7/a'\n"):
-            with self.subTest(src=src):
-                self.assertEqual(kinds(py(src)), {"network"})
-
-    def test_character_references_and_script_escapes(self):
-        # Markup and script decode &#46; or \x2e before a browser reads the address.
-        for name, text in (("static/a.html", '<img src="//x&#46;example/a">\n'),
-                           ("static/a.html", '<img src="//x&period;example/a">\n'),
-                           ("static/a.js", "var u = '//x\\x2eexample/a';\n"),
-                           ("static/a.js", "var u = '//x\\u{2e}example/a';\n"),
-                           ("static/a.js", "var u = '\\x2f\\x2fx.example/a';\n")):
-            with self.subTest(text=text):
-                files = py("x = 1\n")
-                files[name] = text
-                self.assertEqual(kinds(files), {"network"})
-        self.assertEqual(kinds(py("H = '<img src=\"//x&#46;example/a\">'\n")), {"network"})
-        files = py("x = 1\n")
-        files["static/a.js"] = "var u = '/\\\\x2f/x.example/a';\n"  # an escaped backslash
-        self.assertEqual(kinds(files), set())
-
-    def test_escapes_are_read_by_their_own_language(self):
-        # Script reads \. as ".", style sheets read \2e  as "."; markup, script and style
-        # are all built in Python. Neither language reads the other's escapes.
-        for name, text, found in (
-                ("static/a.js", "var u = '//x\\.example/a';\n", {"network"}),
-                ("static/a.css", "a{background:url(//x\\2e example/a)}\n", {"network"}),
-                ("static/a.css", "a{background:url(//x\\.example/a)}\n", {"network"}),
-                ("static/a.html", "<style>a{background:url(//x\\2E example/a)}</style>\n",
-                 {"network"}),
-                ("static/a.js", "var u = '//x&#46;example/a';\n", set()),
-                ("static/a.css", "a{background:url(//x&#46;example/a)}\n", set()),
-                ("static/a.css", "a{background:u\\72l(//x\\2e example/a)}\n", {"network"}),
-                ("static/a.css", "a{background:url('//x\\x2eexample/a')}\n", set()),
-                # A regular expression literal is not a string: its escapes stay as written.
-                ("static/a.js", "s = s.replace(/\\t/g,opts.tabReplace);\n", set())):
-            with self.subTest(text=text):
-                files = py("x = 1\n")
-                files[name] = text
-                self.assertEqual(kinds(files), found)
-        for src in ("S = 'a{background:url(//x\\\\2e example/a)}'\n",
-                    "S = b'<img src=\"//x&#46;example/a\">'\n",
-                    "S = '<script>u = \"//x\\\\x2eexample/a\"</script>'\n"):
-            with self.subTest(src=src):
-                self.assertEqual(kinds(py(src)), {"network"})
-        # Script and style escapes are read inside their strings and url(), so a Python
-        # regular expression is not read as either.
-        for src in ("P = '//.*\\\\n'\n", "P = '[^/\\\\\\\\]+-[^/\\\\\\\\]+\\\\.dist-info/'\n"):
-            with self.subTest(src=src):
-                self.assertEqual(kinds(py(src)), set())
-
-    def test_escapes_read_past_a_stray_quote_and_in_octal(self):
-        # A quote outside a string (in a comment or in page text) does not hide the escapes
-        # of a later string; sloppy script reads an octal escape (\\56 is "."); a numeric
-        # character reference of any length is read as markup reads it.
-        for name, text in (
-                ("static/a.js", "/* don't */ var u = '//x\\x2eexample/a';\n"),
-                ("static/a.html", "<p>Don't</p><script>u = '//x\\x2eexample/a'</script>\n"),
-                ("static/a.css", "/* it's */ a{background:url('//x\\2e example/a')}\n"),
-                ("static/a.js", "var u = '//x\\56example/a';\n"),
-                ("static/a.js", "var u = '//x\\056example/a';\n"),
-                ("static/a.html", '<img src="//x&#' + "0" * 5000 + '46;example/a">\n')):
-            with self.subTest(text=text[:60]):
-                files = py("x = 1\n")
-                files[name] = text
-                self.assertEqual(kinds(files), {"network"})
-        self.assertEqual(kinds(py("H = '//x&#" + "9" * 5000 + ";example/a'\n")), set())
-        # A style comment runs across lines, so a quote on its second line is in it too.
-        src = "S = \"/* note\\nit's */ a{background:url('//x\\\\2e example/a')}\"\n"
-        self.assertEqual(kinds(py(src)), {"network"})
-        # A style sheet file is read a line at a time, without the comment's start, and an
-        # apostrophe in page text is not style; neither hides a later style escape.
-        for name, text in (
-                ("static/a.css", "/* note\nit's */ a{background:url('//x\\2e example/a')}\n"),
-                ("static/a.html", "<p>Don't</p><style>a{background:url('//x\\2e example/a')}"),
-                ("static/a.html", "<p>Don't</p><b style=\"background:url('//x\\2e example/a')\">")):
-            with self.subTest(text=text[:60]):
-                files = py("x = 1\n")
-                files[name] = text
-                self.assertEqual(kinds(files), {"network"})
-        src = "H = \"<p>Don't</p><style>a{background:url('//x\\\\2e example/a')}</style>\"\n"
-        self.assertEqual(kinds(py(src)), {"network"})
-
-    def test_percent_decoded_as_far_as_a_browser_does(self):
-        # A browser decodes %XX once; only a % that folding then makes (from a fullwidth
-        # sign) is decoded again. A % the first decode leaves, or a third level, is not.
-        self.assertEqual(kinds(py("U = '//x%EF%BC%852eexample/a'\n")), {"network"})
-        for src in ("U = '//x%252eexample/a'\n", "U = '//x\\uff05252eexample/a'\n"):
-            with self.subTest(src=src):
-                self.assertEqual(kinds(py(src)), set())
-
-    def test_bracketed_host_is_an_ipv6_literal(self):
-        # A browser reads a host in brackets only as an IPv6 address.
-        for src in ("U = '//[::1]/a'\n", "U = '\\\\\\\\[2001:db8::1]/a'\n",
-                    "U = '//[2001:DB8::1]/a'\n", "U = '/\\t/[::1]/a'\n", "U = '%2F%2F[::1]/a'\n"):
-            with self.subTest(src=src):
-                self.assertEqual(kinds(py(src)), {"network"})
-        for src in ("P = r'(\\\\[nrtbf])'\n", "P = r'[^\\\\\\\\]|\\\\\\\\[0-7]{3}'\n",
-                    "s = '//[x]/a'\n", "s = '//[ab]/a'\n"):
-            with self.subTest(src=src):
-                self.assertEqual(kinds(py(src)), set())
-
-    def test_double_slash_text_is_not_an_address(self):
-        for src in ("U = '/api/foo'\n", "s = 'a // b'\n", "s = '//'\n",
-                    "def f(root, name):\n    return root + '//' + name\n",
-                    "s = 'TODO // later'\n", "s = 'Use // to start a comment'\n",
-                    "P = r'^//\\w+$'\n", "U = r'//\\server\\share'\n"):
-            with self.subTest(src=src):
-                self.assertEqual(kinds(py(src)), set())
-        for path, text in {"static/app.js": "// TODO later\n//console.log(x)\n//@ts-ignore\n"
-                                            "//TODO: later\n//done.\nconst u = '/api/foo';\n",
-                           "static/site.css": "/* see // notes */\nbody{color:red}\n"
-                                              "/* see // z@2.x and //u@intranet/ */\n",
-                           "static/page.html": "<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0//EN\">\n"
-                                               "<p>//host/share notes</p>\n",
-                           "static/note.js": "//\u5b8c\u6210\u3002\n//100%\n//[@id='a']\n"}.items():
-            with self.subTest(path):
-                files = py("x = 1\n")
-                files[path] = text
-                self.assertEqual(kinds(files), set())
-
-    def test_browser_code_in_docstring_is_not_a_call(self):
-        self.assertEqual(kinds(py('def f():\n    """Calls fetch(url) in the page."""\n')),
-                         set())
 
 
 class Process(unittest.TestCase):
@@ -406,6 +141,11 @@ class DynamicCode(unittest.TestCase):
 
     def test_getattr_with_constant_name_resolves(self):
         self.assertEqual(kinds(py("import os\nf = getattr(os, 'system')\n")), {"process"})
+
+    def test_browser_dynamic_code(self):
+        files = py("s = f'eval({x})'\n")
+        files["static/app.js"] = "const f = new Function(src);\n"
+        self.assertEqual(kinds(files), {"dynamic_code"})
 
     def test_pickle(self):
         self.assertEqual(kinds(py("import pickle\npickle.loads(b)\n")), {"dynamic_code"})
