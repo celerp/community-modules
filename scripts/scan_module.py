@@ -159,17 +159,21 @@ PATH_JOINERS = ("pathlib.Path", "pathlib.PurePath", "os.path.join")
 PATH_METHODS = ("resolve", "absolute", "joinpath", "with_suffix", "with_name", "as_posix")
 BAD_SEGMENT = re.compile(r"(^|[/\\])\.\.([/\\]|$)|^[/\\]|^[A-Za-z]:|^~")
 # An address without a scheme (//host/...) uses the page's own scheme to reach that
-# host. Browsers skip extra slashes and a user name up to the last @. The host runs to
-# the first space or / \ ? # ' " ` < > ( ). It is an address when it holds a letter or
-# digit, and a [ or a . or : followed by something other than . , ; : ! ("//done." and
-# "//TODO: x" are text). A host followed by ( is a call, as in "//console.log(x)", and
-# "a // b" or a single word ("//intranet/") is not an address.
-USER_CHAR = r"[^\s/\\?#'\"`<>]"
-HOST_CHAR = r"[^\s/\\?#'\"`<>()]"
+# host. Browsers skip extra slashes, tab and newline characters, and a user name up to
+# the last @. The host runs to the first space or / \ ? # ' " ` < > ( ), or the end. It
+# is an address when it holds a letter or digit, and a [ or a dot or : followed by
+# something other than . , ; : ! ("//done." and "//TODO: x" are text). A dot is also
+# the 。 ． ｡ browsers read as one, or a percent-encoded dot. A host followed by ( is a
+# call, as in "//console.log(x)", and "a // b" or a single word ("//intranet/") is
+# not an address.
+FULL_STOPS = "\u3002\uff0e\uff61"
+DOT = rf"(?:[.:{FULL_STOPS}]|%(?:2e|e3%80%82|ef%bc%8e|ef%bd%a1))"
+USER_CHAR = r"(?:[\t\n\r]|[^\s/\\?#])"
+HOST_CHAR = r"(?:[\t\n\r]|[^\s/\\?#'\"`<>()])"
 NETWORK_PATH = (rf"(?<![\w:/.\\])//+"
                 rf"(?:(?=(?P<user>{USER_CHAR}*@))(?P=user)|(?!{USER_CHAR}*@))"
-                rf"(?={HOST_CHAR}*?\["
-                rf"|[^\s/\\?#'\"`<>().:]*[.:]{HOST_CHAR}*?[^\s/\\?#'\"`<>().,;:!])"
+                rf"(?={HOST_CHAR}*?\[|(?:(?!{DOT}){HOST_CHAR})*{DOT}{HOST_CHAR}*?"
+                rf"[^\s/\\?#'\"`<>().,;:!{FULL_STOPS}])"
                 rf"(?={HOST_CHAR}*?[^\W_])(?={HOST_CHAR}*(?!{HOST_CHAR}|\())")
 URL = re.compile(rf"\b(?:https?|wss?|ftp)://|{NETWORK_PATH}", re.I)
 
@@ -195,7 +199,7 @@ ROUTE_KEYS = ("api_routes", "ui_routes")
 HANDLER_KEYS = ("handler", "render")
 SCRIPT_SUFFIXES = {".js", ".mjs", ".cjs", ".html", ".htm", ".svg", ".css"}
 JS_NETWORK = re.compile(r"\bfetch\s*\(|XMLHttpRequest|\bWebSocket\b|\bEventSource\b|"
-                        rf"sendBeacon|\b(?:https?|wss?)://(?!www\.w3\.org/)|(?i:{NETWORK_PATH})")
+                        rf"sendBeacon|(?i:\b(?:https?|wss?)://(?!www\.w3\.org/)|{NETWORK_PATH})")
 JS_DYNAMIC = re.compile(r"\beval\s*\(|\bnew\s+Function\s*\(|\bimport\s*\(")
 
 
