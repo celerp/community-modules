@@ -147,6 +147,14 @@ class Network(unittest.TestCase):
             "three slashes": "U = '///x.example/a'\n",
             "backslash path": "U = '//x.example\\\\a'\n",
             "unquoted attribute": "H = '<img src=//x.example>'\n",
+            "two @": "U = '//a@b@x.example/'\n",
+            "empty user": "U = '//@x.example/'\n",
+            "user with (": "U = '//a(b@x.example/'\n",
+            "octal IPv4": "U = '//0300.0250.0.1/a'\n",
+            "hex IPv4": "U = '//0xc0.0xa8.0.1/a'\n",
+            "short IPv4": "U = '//127.1/a'\n",
+            "empty port": "U = '//x.example:/a'\n",
+            "empty port at the end": "U = '//x.example:'\n",
         }.items():
             with self.subTest(name):
                 self.assertEqual(kinds(py(src)), {"network"})
@@ -165,11 +173,12 @@ class Network(unittest.TestCase):
                     "s = 'TODO // later'\n", "s = 'Use // to start a comment'\n"):
             with self.subTest(src=src):
                 self.assertEqual(kinds(py(src)), set())
-        for path, text in {"static/app.js": "// TODO later\n//console.log(x)\n"
-                                            "const u = '/api/foo';\n",
-                           "static/site.css": "/* see // notes */\nbody{color:red}\n",
+        for path, text in {"static/app.js": "// TODO later\n//console.log(x)\n//@ts-ignore\n"
+                                            "//TODO: later\n//done.\nconst u = '/api/foo';\n",
+                           "static/site.css": "/* see // notes */\nbody{color:red}\n"
+                                              "/* see // z@2.x and //u@intranet/ */\n",
                            "static/page.html": "<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0//EN\">\n"
-                                               "<p>//host/share and //1.2 notes</p>\n"}.items():
+                                               "<p>//host/share notes</p>\n"}.items():
             with self.subTest(path):
                 files = py("x = 1\n")
                 files[path] = text
