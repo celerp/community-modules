@@ -126,6 +126,44 @@ class Network(unittest.TestCase):
             with self.subTest(name):
                 self.assertEqual(kinds(py(src)), {"network"})
 
+    def test_address_without_a_scheme(self):
+        # //host/... reaches another host exactly as https://host/... does.
+        for name, src in {
+            "Script src": "from fasthtml.common import Script\n"
+                          "s = Script(src='//x.example/a.js')\n",
+            "hx_get": "from fasthtml.common import Div\nd = Div(hx_get='//x.example/a')\n",
+            "hx-post dict": "A = {'hx-post': '//x.example/a'}\n",
+            "Iframe src": "from fasthtml.common import Iframe\n"
+                          "f = Iframe(src='//x.example/')\n",
+            "Form action": "from fasthtml.common import Form\n"
+                           "f = Form(action='//x.example/f', method='post')\n",
+            "image beacon": "JS = \"new Image().src = '//x.example/p?d=' + d\"\n",
+            "host and port": "U = '//localhost:8000/a'\n",
+        }.items():
+            with self.subTest(name):
+                self.assertEqual(kinds(py(src)), {"network"})
+        for path, text in {"static/app.js": "const u = '//x.example/a';\n",
+                           "static/page.html": "<img src=\"//x.example/p.png\">\n",
+                           "static/site.css": "body{background:url(//x.example/a.png)}\n"}.items():
+            with self.subTest(path):
+                files = py("x = 1\n")
+                files[path] = text
+                self.assertEqual(kinds(files), {"network"})
+
+    def test_double_slash_text_is_not_an_address(self):
+        for src in ("U = '/api/foo'\n", "s = 'a // b'\n", "s = '//'\n",
+                    "def f(root, name):\n    return root + '//' + name\n",
+                    "s = 'TODO // later'\n", "s = 'Use // to start a comment'\n"):
+            with self.subTest(src=src):
+                self.assertEqual(kinds(py(src)), set())
+        for path, text in {"static/app.js": "// TODO later\n//console.log(x)\n"
+                                            "const u = '/api/foo';\n",
+                           "static/site.css": "/* see // notes */\nbody{color:red}\n"}.items():
+            with self.subTest(path):
+                files = py("x = 1\n")
+                files[path] = text
+                self.assertEqual(kinds(files), set())
+
     def test_browser_code_in_docstring_is_not_a_call(self):
         self.assertEqual(kinds(py('def f():\n    """Calls fetch(url) in the page."""\n')),
                          set())
