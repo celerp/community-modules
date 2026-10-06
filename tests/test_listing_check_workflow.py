@@ -79,7 +79,13 @@ class ListingCheck(unittest.TestCase):
 
     def test_only_pinned_actions(self):
         for use in re.findall(r"uses:\s*(\S+)", self.text):
-            self.assertRegex(use, r"^actions/(checkout|upload-artifact)@[0-9a-f]{40}$")
+            self.assertRegex(use, r"^actions/(checkout|setup-python|upload-artifact)@[0-9a-f]{40}$")
+
+    def test_checks_run_on_the_pinned_python(self):
+        # The scan folds letters newer than this Python's Unicode data from a fixed list.
+        for workflow in (CHECK, WORKFLOWS / "ci.yml"):
+            with self.subTest(workflow.name):
+                self.assertIn('python-version: "3.12"', workflow.read_text(encoding="utf-8"))
 
     def test_one_check_per_pull_request_at_a_time(self):
         block = self.text.split("\nconcurrency:", 1)[1].split("\n\n", 1)[0]
