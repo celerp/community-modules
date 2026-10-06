@@ -155,13 +155,33 @@ class Network(unittest.TestCase):
             "short IPv4": "U = '//127.1/a'\n",
             "empty port": "U = '//x.example:/a'\n",
             "empty port at the end": "U = '//x.example:'\n",
+            "ideographic full stop": "U = '//x\u3002example/a'\n",
+            "fullwidth full stop": "U = '//x\uff0eexample/a'\n",
+            "halfwidth full stop": "U = '//x\uff61example/a'\n",
+            "percent-encoded dot": "U = '//x%2Eexample/a'\n",
+            "percent-encoded full stop": "U = '//x%E3%80%82example/a'\n",
+            "newline in host": "U = '//cdn\\n.example/a.js'\n",
+            "tab in host": "U = '//cdn\\t.example/a.js'\n",
+            "quote in user": "U = \"//u'@x.example/a\"\n",
+            "angle bracket in user": "U = '//u<@x.example/a'\n",
         }.items():
             with self.subTest(name):
                 self.assertEqual(kinds(py(src)), {"network"})
         for path, text in {"static/app.js": "const u = '//x.example/a';\n",
                            "static/page.html": "<img src=\"//x.example/p.png\">\n",
                            "static/link.html": "<a href=//192.0.2.1>x</a>\n",
+                           "static/tab.js": "const u = '//cdn\t.example/a';\n",
+                           "static/user.html": "<img src=\"//u'@x.example/p.png\">\n",
                            "static/site.css": "body{background:url(//x.example/a.png)}\n"}.items():
+            with self.subTest(path):
+                files = py("x = 1\n")
+                files[path] = text
+                self.assertEqual(kinds(files), {"network"})
+
+    def test_scheme_in_any_case(self):
+        # Browsers read a scheme in any case, in a page as in Python.
+        for path, text in {"static/a.html": "<script src=\"HTTPS://x.example/a.js\"></script>\n",
+                           "static/a.js": "new Image().src = 'Http://x.example/p';\n"}.items():
             with self.subTest(path):
                 files = py("x = 1\n")
                 files[path] = text
@@ -178,7 +198,8 @@ class Network(unittest.TestCase):
                            "static/site.css": "/* see // notes */\nbody{color:red}\n"
                                               "/* see // z@2.x and //u@intranet/ */\n",
                            "static/page.html": "<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0//EN\">\n"
-                                               "<p>//host/share notes</p>\n"}.items():
+                                               "<p>//host/share notes</p>\n",
+                           "static/note.js": "//\u5b8c\u6210\u3002\n//100%\n//[@id='a']\n"}.items():
             with self.subTest(path):
                 files = py("x = 1\n")
                 files[path] = text
