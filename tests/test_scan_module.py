@@ -252,6 +252,22 @@ class Network(unittest.TestCase):
             with self.subTest(src=src):
                 self.assertEqual(kinds(py(src)), {"network"})
 
+    def test_character_references_and_script_escapes(self):
+        # Markup and script decode &#46; or \x2e before a browser reads the address.
+        for name, text in (("static/a.html", '<img src="//x&#46;example/a">\n'),
+                           ("static/a.html", '<img src="//x&period;example/a">\n'),
+                           ("static/a.js", "var u = '//x\\x2eexample/a';\n"),
+                           ("static/a.js", "var u = '//x\\u{2e}example/a';\n"),
+                           ("static/a.js", "var u = '\\x2f\\x2fx.example/a';\n")):
+            with self.subTest(text=text):
+                files = py("x = 1\n")
+                files[name] = text
+                self.assertEqual(kinds(files), {"network"})
+        self.assertEqual(kinds(py("H = '<img src=\"//x&#46;example/a\">'\n")), {"network"})
+        files = py("x = 1\n")
+        files["static/a.js"] = "var u = '/\\\\x2f/x.example/a';\n"  # an escaped backslash
+        self.assertEqual(kinds(files), set())
+
     def test_bracketed_host_is_an_ipv6_literal(self):
         # A browser reads a host in brackets only as an IPv6 address.
         for src in ("U = '//[::1]/a'\n", "U = '\\\\\\\\[2001:db8::1]/a'\n",
