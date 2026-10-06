@@ -22,7 +22,9 @@ README = ("# Directory\n\nIntro.\n\n<!-- modules:begin -->\n<!-- modules:end -->
 
 
 def files_for(*entries: dict) -> dict[str, str]:
-    text = index_text(*entries)
+    """index.json in catalog order with its regenerated README."""
+    rank = {"official": 0, "verified": 1, "community": 2}
+    text = index_text(*sorted(entries, key=lambda e: (rank[e["tier"]], e["id"])))
     return {"index.json": text, "README.md": regenerate(README, json.loads(text))}
 
 
@@ -124,8 +126,9 @@ class Scope(Case):
         self.assertFails("gen_readme.py")
 
     def test_invalid_index(self):
-        self.with_entry(OFFICIAL, {k: v for k, v in NEW.items() if k != "commit"}, EXISTING)
-        self.head["README.md"] = regenerate(README, json.loads(self.head["index.json"]))
+        self.head = {"index.json": index_text(
+            OFFICIAL, {k: v for k, v in NEW.items() if k != "commit"}, EXISTING),
+            "README.md": BASE["README.md"]}
         self.assertFails("commit")
 
     def test_two_entries_added(self):
