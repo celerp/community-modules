@@ -139,11 +139,20 @@ class Network(unittest.TestCase):
                            "f = Form(action='//x.example/f', method='post')\n",
             "image beacon": "JS = \"new Image().src = '//x.example/p?d=' + d\"\n",
             "host and port": "U = '//localhost:8000/a'\n",
+            "IPv4": "U = '//192.0.2.1/a'\n",
+            "user and password": "U = '//u:p@x.example/a'\n",
+            "trailing dot": "U = '//x.example./a'\n",
+            "non-ASCII host": "U = '//\u043f\u0440\u0438\u043c\u0435\u0440.\u0440\u0444/a'\n",
+            "underscore": "U = '//a_b.x.example/a'\n",
+            "three slashes": "U = '///x.example/a'\n",
+            "backslash path": "U = '//x.example\\\\a'\n",
+            "unquoted attribute": "H = '<img src=//x.example>'\n",
         }.items():
             with self.subTest(name):
                 self.assertEqual(kinds(py(src)), {"network"})
         for path, text in {"static/app.js": "const u = '//x.example/a';\n",
                            "static/page.html": "<img src=\"//x.example/p.png\">\n",
+                           "static/link.html": "<a href=//192.0.2.1>x</a>\n",
                            "static/site.css": "body{background:url(//x.example/a.png)}\n"}.items():
             with self.subTest(path):
                 files = py("x = 1\n")
@@ -158,7 +167,9 @@ class Network(unittest.TestCase):
                 self.assertEqual(kinds(py(src)), set())
         for path, text in {"static/app.js": "// TODO later\n//console.log(x)\n"
                                             "const u = '/api/foo';\n",
-                           "static/site.css": "/* see // notes */\nbody{color:red}\n"}.items():
+                           "static/site.css": "/* see // notes */\nbody{color:red}\n",
+                           "static/page.html": "<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0//EN\">\n"
+                                               "<p>//host/share and //1.2 notes</p>\n"}.items():
             with self.subTest(path):
                 files = py("x = 1\n")
                 files[path] = text
