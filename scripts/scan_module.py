@@ -31,8 +31,10 @@ import ast
 import posixpath
 import re
 import sys
+import unicodedata
 from dataclasses import dataclass
 from pathlib import PurePosixPath
+from urllib.parse import unquote
 
 
 @dataclass(frozen=True)
@@ -159,34 +161,23 @@ PATH_JOINERS = ("pathlib.Path", "pathlib.PurePath", "os.path.join")
 PATH_METHODS = ("resolve", "absolute", "joinpath", "with_suffix", "with_name", "as_posix")
 BAD_SEGMENT = re.compile(r"(^|[/\\])\.\.([/\\]|$)|^[/\\]|^[A-Za-z]:|^~")
 # An address without a scheme (//host/...) uses the page's own scheme to reach that
-# host. Browsers skip extra slashes and backslashes, tab and newline characters, and a
-# user name up to the last @. The host runs to the first space or / \ ? # ' " ` < > ( ),
-# or the end. It is an address when it holds a letter or digit, and a [ or a dot or :
-# followed by something other than . , ; : ! ("//done." and "//TODO: x" are text). A
-# dot is also the 。 ． ｡ browsers read as one, or a percent-encoded dot, which browsers
-# also read in fullwidth characters, with ﹪ or ％ as the percent sign, and with tab or
-# newline characters inside. A host followed by ( is a call, as in "//console.log(x)",
-# and "a // b" or a single word ("//intranet/") is not an address.
-FULL_STOPS = "\u3002\uff0e\uff61"
-PERCENT_SIGNS = "%\ufe6a\uff05"
-
-
-def _encoded(code: str) -> str:
-    """A pattern for a percent-encoded code in ASCII or fullwidth, tab or newline anywhere."""
-    return r"[\t\n\r]*".join(f"[{PERCENT_SIGNS}]" if c == "%" else f"[{c}{chr(ord(c) + 0xFEE0)}]"
-                              for c in code)
-
-
-DOT = (rf"(?:[.:{FULL_STOPS}]|"
-       + "|".join(map(_encoded, ("%2e", "%e3%80%82", "%ef%bc%8e", "%ef%bd%a1"))) + ")")
-USER_CHAR = r"(?:[\t\n\r]|[^\s/\\?#])"
-HOST_CHAR = r"(?:[\t\n\r]|[^\s/\\?#'\"`<>()])"
-NETWORK_PATH = (rf"(?<![\w:/.\\])//(?:[\t\n\r]*[/\\])*"
+# host. Browsers skip extra slashes and a user name up to the last @. The host runs to
+# the first space or / \ ? # ' " ` < > ( ), or the end. It is an address when it holds
+# a letter or digit, and a [ or a . or : followed by something other than . , ; : !
+# ("//done." and "//TODO: x" are text). A host followed by ( is a call, as in
+# "//console.log(x)", and "a // b" or a single word ("//intranet/") is not an address.
+# The pattern reads plain ASCII; _as_browser_reads turns other spellings into it.
+USER_CHAR = r"[^\s/\\?#]"
+HOST_CHAR = r"[^\s/\\?#'\"`<>()]"
+NETWORK_PATH = (rf"(?<![\w:/.\\])//+"
                 rf"(?:(?=(?P<user>{USER_CHAR}*@))(?P=user)|(?!{USER_CHAR}*@))"
-                rf"(?={HOST_CHAR}*?\[|(?:(?!{DOT}){HOST_CHAR})*{DOT}{HOST_CHAR}*?"
-                rf"[^\s/\\?#'\"`<>().,;:!{FULL_STOPS}])"
+                rf"(?={HOST_CHAR}*?\[|[^\s/\\?#'\"`<>().:]*[.:]{HOST_CHAR}*?"
+                rf"[^\s/\\?#'\"`<>().,;:!])"
                 rf"(?={HOST_CHAR}*?[^\W_])(?={HOST_CHAR}*(?!{HOST_CHAR}|\())")
 URL = re.compile(rf"\b(?:https?|wss?|ftp)://|{NETWORK_PATH}", re.I)
+# Characters a browser's URL parser drops (tab, newline) or reads as another: the
+# ideographic full stop NFKC leaves as it is, and a backslash.
+BROWSER_READS = str.maketrans({"\t": None, "\n": None, "\r": None, "\u3002": ".", "\\": "/"})
 
 DATA_SUFFIXES = {
     ".md", ".txt", ".rst", ".json", ".toml", ".yaml", ".yml", ".cfg", ".ini", ".csv",
@@ -626,11 +617,12 @@ class _File:
                   and id(node) not in bare_strings):
                 # Script and HTML built in Python reach the browser like a .js file.
                 text = node.value if isinstance(node.value, str) else _bytes_text(node.value)
-                if URL.search(text):
+                readings = (text, _as_browser_reads(text))
+                if any(map(URL.search, readings)):
                     self.add("network", node, "a web address in the code")
-                elif JS_NETWORK.search(text):
+                elif any(map(JS_NETWORK.search, readings)):
                     self.add("network", node, "browser network call")
-                if JS_DYNAMIC.search(text):
+                if any(map(JS_DYNAMIC.search, readings)):
                     self.add("dynamic_code", node, "code built at runtime")
         return self.findings
 
@@ -842,6 +834,17 @@ def _bytes_text(data: bytes) -> str:
         return data.decode("latin-1")
 
 
+def _as_browser_reads(text: str) -> str:
+    """Text as a browser's URL parser reads it: tab and newline dropped, look-alike
+    characters folded (NFKC), %XX decoded once and a backslash read as a slash.
+
+    The scan matches this and the text as written, since dropping a line break joins
+    the last word of a line to the next one ("x\\nfetch(u)" reads "xfetch(u)").
+    """
+    folded = unicodedata.normalize("NFKC", text).translate(BROWSER_READS)
+    return unicodedata.normalize("NFKC", unquote(folded)).translate(BROWSER_READS)
+
+
 def _scan_script(path: str, data: bytes) -> list[Finding]:
     try:
         text = data.decode("utf-8")
@@ -849,9 +852,10 @@ def _scan_script(path: str, data: bytes) -> list[Finding]:
         return [Finding("unreadable", path, 1, "not UTF-8 text")]
     found = []
     for lineno, line in enumerate(text.splitlines(), 1):
-        if JS_NETWORK.search(line):
+        readings = (line, _as_browser_reads(line))
+        if any(map(JS_NETWORK.search, readings)):
             found.append(Finding("network", path, lineno, "browser network call"))
-        if JS_DYNAMIC.search(line):
+        if any(map(JS_DYNAMIC.search, readings)):
             found.append(Finding("dynamic_code", path, lineno, "code built at runtime"))
     return found
 
