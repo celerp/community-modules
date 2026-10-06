@@ -137,13 +137,15 @@ changes names in modules Python, Celerp or its libraries provide.
 
 The scan is a review aid, not a security boundary. It reads the code without
 running it and catches the ordinary ways of doing these things. A web address
-counts whether it is written with a scheme (`https://host/...`) or without one
-(`//host/...`); an address or call built while the code runs, from pieces,
-variables or lookups, is not followed. It does not follow every way Python can
-reach a name, for example through attributes of other objects, private names
-inside standard modules, or binding orders Python resolves differently than the
-scan reads them, so a passed check is not proof that a module does only what it
-declares. Anything it cannot follow is left to a human reviewer.
+counts when it is written with a scheme (`https://host/...`). One written
+without a scheme (`//host/...`) counts when its host has a dot, colon or
+bracket; a single word such as `//name/` does not. An address or call built
+while the code runs, from pieces, variables or lookups, is not followed. It does
+not follow every way Python can reach a name, for example through attributes of
+other objects, private names inside standard modules, or binding orders Python
+resolves differently than the scan reads them, so a passed check is not proof
+that a module does only what it declares. Anything it cannot follow is left to a
+human reviewer.
 
 ### What happens next
 

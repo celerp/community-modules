@@ -14,15 +14,16 @@ Python is read with `ast`, names are resolved through the file's own imports, so
 `import os as o; o.system(...)` is seen as `os.system`. Browser code is read in
 script, page and style sheet files and in the module's Python strings and bytes,
 docstrings left out unless the file reads them back through `__doc__`. A web
-address counts with a scheme (`https://host/...`) or without one (`//host/...`);
-an address or call built while the code runs is not followed. Where the scan
-cannot follow a name (a module such as `os` stored or passed as a value, an
-attribute name built at runtime) it reports that instead, as it does code that
-changes names in modules Python, Celerp or its libraries provide. It is a review
-aid, not a security boundary: it reports the ordinary ways of doing these
-things, not every way Python can reach a name, and a clean scan is not proof of
-what the code does. Test files are left out unless the module's own code imports
-them.
+address counts with a scheme (`https://host/...`). One without a scheme
+(`//host/...`) counts when its host has a dot, colon or bracket; a single word
+such as `//name/` does not. An address or call built while the code runs is not
+followed. Where the scan cannot follow a name (a module such as `os` stored or
+passed as a value, an attribute name built at runtime) it reports that instead,
+as it does code that changes names in modules Python, Celerp or its libraries
+provide. It is a review aid, not a security boundary: it reports the ordinary
+ways of doing these things, not every way Python can reach a name, and a clean
+scan is not proof of what the code does. Test files are left out unless the
+module's own code imports them.
 """
 from __future__ import annotations
 
@@ -158,12 +159,18 @@ PATH_JOINERS = ("pathlib.Path", "pathlib.PurePath", "os.path.join")
 PATH_METHODS = ("resolve", "absolute", "joinpath", "with_suffix", "with_name", "as_posix")
 BAD_SEGMENT = re.compile(r"(^|[/\\])\.\.([/\\]|$)|^[/\\]|^[A-Za-z]:|^~")
 # An address without a scheme (//host/...) uses the page's own scheme to reach that
-# host. It needs a host-like authority (a dotted name, an IP address or a port), so
-# "a // b" and comment slashes are not one. Browsers skip extra slashes and a user
-# name before the host, and read a backslash after it as a slash.
-NETWORK_PATH = (r"(?<![\w:/.\\])//+(?:[^\s/\\?#@'\"`<>]+@)?"
-                r"(?:(?:\[[0-9a-f:.]+\]|\d{1,3}(?:\.\d{1,3}){3}|(?:[\w-]+\.)+[^\W\d_][\w-]*\.?)"
-                r"(?::\d+)?|[\w.-]+:\d+)(?=[/\\?#'\"`\s)>]|$)")
+# host. Browsers skip extra slashes and a user name up to the last @. The host runs to
+# the first space or / \ ? # ' " ` < > ( ). It is an address when it holds a letter or
+# digit, and a [ or a . or : followed by something other than . , ; : ! ("//done." and
+# "//TODO: x" are text). A host followed by ( is a call, as in "//console.log(x)", and
+# "a // b" or a single word ("//intranet/") is not an address.
+USER_CHAR = r"[^\s/\\?#'\"`<>]"
+HOST_CHAR = r"[^\s/\\?#'\"`<>()]"
+NETWORK_PATH = (rf"(?<![\w:/.\\])//+"
+                rf"(?:(?=(?P<user>{USER_CHAR}*@))(?P=user)|(?!{USER_CHAR}*@))"
+                rf"(?={HOST_CHAR}*?\["
+                rf"|[^\s/\\?#'\"`<>().:]*[.:]{HOST_CHAR}*?[^\s/\\?#'\"`<>().,;:!])"
+                rf"(?={HOST_CHAR}*?[^\W_])(?={HOST_CHAR}*(?!{HOST_CHAR}|\())")
 URL = re.compile(rf"\b(?:https?|wss?|ftp)://|{NETWORK_PATH}", re.I)
 
 DATA_SUFFIXES = {
