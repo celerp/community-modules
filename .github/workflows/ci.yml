@@ -1,7 +1,8 @@
 name: Validate catalog
 
-# Validates index.json (schema + policy rules) and checks the README table is
-# generated from it. Read-only; it never runs a listed module's code.
+# Validates index.json (schema + policy rules), checks the README table is
+# generated from it, and checks a listing pull request against its module's
+# repository. Read-only; it never runs a listed module's code.
 on:
   pull_request:
   push:
@@ -14,8 +15,32 @@ jobs:
   validate:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - run: pip install --quiet "jsonschema>=4"
       - run: python3 scripts/validate_index.py --selftest
+      - run: python3 -m unittest discover -s tests -t tests
       - run: python3 scripts/validate_index.py
       - run: python3 scripts/gen_readme.py --check
+
+  # The listing check. Its result.json is what the "Merge listing" workflow
+  # reads to decide whether to merge.
+  submission:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - run: pip install --quiet "jsonschema>=4"
+      - run: python3 scripts/check_submission.py "$RUNNER_TEMP/result.json"
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: submission-result
+          path: ${{ runner.temp }}/result.json
+          retention-days: 7
