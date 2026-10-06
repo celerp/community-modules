@@ -200,21 +200,27 @@ BROWSER_READS = str.maketrans({"\u3002": ".", "\\": "/", "\ua7f1": "s", **{
     chr(0x1ccd6 + i): c for i, c in enumerate("abcdefghijklmnopqrstuvwxyz0123456789")}})
 # Escapes a language decodes before a browser reads an address written in it, read only
 # inside the literals that can hold an address. Script strings and template literals:
-# \xHH, \uHHHH, \u{H...}, \n and the other control letters, a backslash before a line
-# break (dropped) and before any other character but a digit, x or u (that character).
-# Style sheet strings and url(), whose three letters may be escaped too: \ and 1 to 6 hex
-# digits with one optional space after them, or \ before any other character (that
-# character). Markup reads character references (&#46;, &period;) with the standard
-# library. A literal without its closing quote or bracket runs as far as it can go,
-# so every literal that starts matches and reading stays linear.
+# \xHH, \uHHHH, \u{H...}, octal (\56), \n and the other control letters, a backslash
+# before a line break (dropped) and before any other character but x or u (that
+# character). Outside them, where a stray quote can hide a string, \xHH, \uHHHH and
+# \u{H...} are read too. Style sheet strings and url(), whose three letters may be
+# escaped too: \ and 1 to 6 hex digits with one optional space after them, or \ before
+# any other character (that character); comments are left as written. Markup reads
+# character references (&#46;, &period;) with the standard library, a decimal one longer
+# than any code point first shortened to one. A literal without its closing quote or
+# bracket runs as far as it can go, so every literal that starts matches and reading
+# stays linear.
 QUOTED = r"'(?:[^'\\\n]|\\.)*'?|\"(?:[^\"\\\n]|\\.)*\"?"
-SCRIPT_LITERAL = re.compile(rf"{QUOTED}|`(?:[^`\\]|\\.)*`?", re.S)
+SCRIPT_LITERAL = re.compile(rf"{QUOTED}|`(?:[^`\\]|\\.)*`?"
+                            r"|\\(?:\\|x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|u\{[0-9a-fA-F]+\})", re.S)
 STYLE_NAME_CHAR = r"[\w-]|\\(?:[0-9a-fA-F]{1,6}[ \t\n\r\f]?|[^0-9a-fA-F\n\r\f])"
 STYLE_LITERAL = re.compile(
-    rf"{QUOTED}|(?<![\w\\-])((?:{STYLE_NAME_CHAR}){{3}})\((?:[^)\\]|\\.)*\)?", re.S)
+    rf"/\*(?:[^*\n]|\*(?!/))*(?:\*/)?|{QUOTED}"
+    rf"|(?<![\w\\-])((?:{STYLE_NAME_CHAR}){{3}})\((?:[^)\\]|\\.)*\)?", re.S)
 SCRIPT_ESCAPE = re.compile(r"\\(?:x([0-9a-fA-F]{2})|u([0-9a-fA-F]{4})|u\{([0-9a-fA-F]+)\}"
-                           r"|(\r\n|[^xu1-9]))")
-SCRIPT_CONTROLS = {"b": "\b", "f": "\f", "n": "\n", "r": "\r", "t": "\t", "v": "\v", "0": "\0",
+                           r"|([0-3][0-7]{0,2}|[4-7][0-7]?)|(\r\n|[^xu0-7]))")
+CHARACTER_REFERENCE = re.compile(r"&#0*([0-9]+)")
+SCRIPT_CONTROLS = {"b": "\b", "f": "\f", "n": "\n", "r": "\r", "t": "\t", "v": "\v",
                    "\n": "", "\r": "", "\r\n": "", "\u2028": "", "\u2029": ""}
 STYLE_ESCAPE = re.compile(r"\\(?:([0-9a-fA-F]{1,6})(?:\r\n|[ \t\n\r\f])?|([^\n\r\f0-9a-fA-F]))")
 
@@ -885,13 +891,21 @@ def _readings(text: str, languages: tuple) -> tuple[str, ...]:
 
 
 def _script_text(text: str) -> str:
-    return SCRIPT_LITERAL.sub(lambda literal: SCRIPT_ESCAPE.sub(_script_char, literal[0]), text)
+    return SCRIPT_LITERAL.sub(_script_literal, text)
+
+
+def _script_literal(literal: re.Match[str]) -> str:
+    """A script string, or an escape outside one, with its escapes read. An escaped
+    backslash outside a string stays as written."""
+    return literal[0] if literal[0] == "\\\\" else SCRIPT_ESCAPE.sub(_script_char, literal[0])
 
 
 def _script_char(escape: re.Match[str]) -> str:
     if digits := escape[1] or escape[2] or escape[3]:
         return chr(int(digits, 16)) if int(digits, 16) < 0x110000 else escape[0]
-    return SCRIPT_CONTROLS.get(escape[4], escape[4])
+    if escape[4]:
+        return chr(int(escape[4], 8))
+    return SCRIPT_CONTROLS.get(escape[5], escape[5])
 
 
 def _style_text(text: str) -> str:
@@ -900,6 +914,8 @@ def _style_text(text: str) -> str:
 
 def _style_literal(literal: re.Match[str]) -> str:
     """A style string, or a function whose name reads "url", with its escapes read."""
+    if literal[0].startswith("/*"):
+        return literal[0]
     if literal[1] is not None and STYLE_ESCAPE.sub(_style_char, literal[1]).lower() != "url":
         return literal[0]
     return STYLE_ESCAPE.sub(_style_char, literal[0])
@@ -912,8 +928,13 @@ def _style_char(escape: re.Match[str]) -> str:
     return chr(code) if 0 < code < 0x110000 and not 0xd800 <= code < 0xe000 else "\ufffd"
 
 
+def _markup_text(text: str) -> str:
+    return html.unescape(CHARACTER_REFERENCE.sub(
+        lambda ref: "&#" + (ref[1] if len(ref[1]) < 8 else "1114112"), text))
+
+
 # The languages each page file is written in; markup holds script and style too.
-PAGE_LANGUAGES = (html.unescape, _script_text, _style_text)
+PAGE_LANGUAGES = (_markup_text, _script_text, _style_text)
 FILE_LANGUAGES = {".js": (_script_text,), ".mjs": (_script_text,), ".cjs": (_script_text,),
                   ".css": (_style_text,)}
 
