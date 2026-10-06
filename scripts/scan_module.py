@@ -158,9 +158,12 @@ PATH_JOINERS = ("pathlib.Path", "pathlib.PurePath", "os.path.join")
 PATH_METHODS = ("resolve", "absolute", "joinpath", "with_suffix", "with_name", "as_posix")
 BAD_SEGMENT = re.compile(r"(^|[/\\])\.\.([/\\]|$)|^[/\\]|^[A-Za-z]:|^~")
 # An address without a scheme (//host/...) uses the page's own scheme to reach that
-# host. It needs a host-like authority, so "a // b" and comment slashes are not one.
-NETWORK_PATH = (r"(?<![\w:/.\\])//(?:\[[0-9a-f:.]+\]|(?:[a-z0-9-]+\.)+[a-z][a-z0-9-]+(?::\d+)?"
-                r"|[a-z0-9.-]+:\d+)(?=[/?#'\"`\s)]|$)")
+# host. It needs a host-like authority (a dotted name, an IP address or a port), so
+# "a // b" and comment slashes are not one. Browsers skip extra slashes and a user
+# name before the host, and read a backslash after it as a slash.
+NETWORK_PATH = (r"(?<![\w:/.\\])//+(?:[^\s/\\?#@'\"`<>]+@)?"
+                r"(?:(?:\[[0-9a-f:.]+\]|\d{1,3}(?:\.\d{1,3}){3}|(?:[\w-]+\.)+[^\W\d_][\w-]*\.?)"
+                r"(?::\d+)?|[\w.-]+:\d+)(?=[/\\?#'\"`\s)>]|$)")
 URL = re.compile(rf"\b(?:https?|wss?|ftp)://|{NETWORK_PATH}", re.I)
 
 DATA_SUFFIXES = {
