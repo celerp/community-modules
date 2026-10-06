@@ -29,7 +29,7 @@ import pathlib
 import sys
 import zipfile
 
-from github_api import ApiError, GitHub
+from github_api import ApiError, GitHub, NotFound, TooLarge
 from listing import CODEOWNERS, LISTING_FILES, code_owners, is_maintainer
 
 FLAG_LABEL = "needs-review"
@@ -59,7 +59,10 @@ NOT_MERGED = ("## Listing check: not merged\n\n"
 
 
 def _artifact_result(gh, base: str, run_id: int) -> dict | None:
-    """The check's result.json, or None when it is missing or unusable."""
+    """The check's result.json, or None when it is missing or unusable.
+
+    Any other API error (a rate limit, an outage) is raised, so the check is not
+    answered and the next gate run reads it again."""
     try:
         listed = gh.get(f"{base}/actions/runs/{run_id}/artifacts").get("artifacts", [])
         found = [a for a in listed if a.get("name") == ARTIFACT and not a.get("expired")]
@@ -71,7 +74,7 @@ def _artifact_result(gh, base: str, run_id: int) -> dict | None:
             if info.file_size > MAX_ARTIFACT_BYTES:
                 return None
             result = json.loads(zf.read(info))
-    except (ApiError, zipfile.BadZipFile, KeyError, ValueError):
+    except (NotFound, TooLarge, zipfile.BadZipFile, KeyError, ValueError):
         return None
     return result if isinstance(result, dict) else None
 

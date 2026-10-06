@@ -129,6 +129,21 @@ class Refuses(Gate):
         self.gh.downloads[URL] = buf.getvalue()
         self.assertNoMerge()
 
+    def test_error_reading_the_result_is_retried_not_answered(self):
+        # A rate limit or outage is not the check's outcome: the run fails and the
+        # next gate run reads the result again.
+        for route, error in ((URL, "GET artifact: HTTP 403"),
+                             (f"{R}/actions/runs/77/artifacts", "GET artifacts: HTTP 502")):
+            with self.subTest(route=route):
+                self.gh.writes.clear()
+                table = self.gh.downloads if route == URL else self.gh.routes
+                saved, table[route] = table[route], ApiError(error)
+                with self.assertRaises(ApiError):
+                    self.run_gate()
+                self.assertEqual(self.gh.writes, [])
+                table[route] = saved
+        self.assertEqual(len(self.merges()), 1)
+
     def test_unknown_status(self):
         self.gh.downloads[URL] = artifact(status="maintainer")
         self.assertNoMerge()
