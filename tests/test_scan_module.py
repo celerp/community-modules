@@ -26,8 +26,9 @@ class CleanCode(unittest.TestCase):
         self.assertEqual(kinds(py(
             "import httpx\nfrom ui.config import API_BASE\n"
             "def c():\n    return httpx.AsyncClient(base_url=API_BASE, timeout=5)\n"
-            "async def call(c, method, url):\n"
-            "    try:\n        return await getattr(c, method)(url)\n"
+            "async def call(method, url):\n"
+            "    try:\n        async with c() as client:\n"
+            "            return await getattr(client, method)(url)\n"
             "    except httpx.HTTPError:\n        return None\n")), set())
 
     def test_file_under_celerp_data_dir_is_allowed(self):
@@ -123,6 +124,67 @@ class DynamicCode(unittest.TestCase):
         files = py("from .tests import helper\n")
         files["tests/helper.py"] = "import subprocess\n"
         self.assertIn("process", kinds(files))
+
+
+class Indirection(unittest.TestCase):
+    """A dangerous name the scan cannot follow is flagged where it is passed on."""
+
+    def test_callable_assigned_then_called(self):
+        self.assertEqual(kinds(py("import os\nx = os.system\nx('ls')\n")), {"process"})
+
+    def test_module_assigned_then_used(self):
+        for src in ("import os\nm = os\nm.system('ls')\n",
+                    "import os\nm = os\nn = m\nn.popen('ls')\n",
+                    "import os\na, b = os, 1\na.system('ls')\n",
+                    "import os\n(m := os).system('ls')\n",
+                    "import os\nclass C:\n    def __init__(self):\n        self.o = os\n"
+                    "    def go(self):\n        self.o.system('ls')\n",
+                    "import os\ndef g(m=os):\n    m.system('ls')\n",
+                    "import os\ndef g():\n    return os\ng().system('ls')\n",
+                    "import importlib as il\nm = il\nm.import_module('os')\n",
+                    "import asyncio\na = asyncio\na.create_subprocess_shell('ls')\n",
+                    "from celerp import services\ns = services\ns.email.send_email('x')\n",
+                    "from os import path\np = path\np.expanduser('~')\n"):
+            with self.subTest(src=src):
+                self.assertEqual(kinds(py(src)), {"dynamic_code"})
+
+    def test_module_passed_through_a_container(self):
+        for src in ("import os\nd = {'f': os}\nd['f'].system('ls')\n",
+                    "import os\nfs = [os]\nfs[0].system('ls')\n"):
+            with self.subTest(src=src):
+                self.assertEqual(kinds(py(src)), {"dynamic_code"})
+
+    def test_file_call_assigned_then_called(self):
+        for src in ("o = open\no('/etc/passwd')\n",
+                    "import pathlib\np = pathlib.Path\np('/etc/passwd').read_text()\n",
+                    "from pathlib import Path\nopeners = {'p': Path}\n"):
+            with self.subTest(src=src):
+                self.assertEqual(kinds(py(src)), {"files"})
+
+    def test_star_import(self):
+        self.assertEqual(kinds(py("from os import *\nsystem('ls')\n")), {"dynamic_code"})
+
+    def test_computed_attribute_names(self):
+        for src in ("def f(obj, name):\n    return getattr(obj, name)\n",
+                    "import httpx\nfrom ui.config import API_BASE\n"
+                    "async def call(c, method, url):\n    return await getattr(c, method)(url)\n",
+                    "import httpx\nfrom ui.config import API_BASE\n"
+                    "def c():\n    return httpx.AsyncClient(base_url=API_BASE)\n"
+                    "def call(name):\n    return getattr(c(), name)\n"
+                    "c = 1\n",
+                    "import operator\nf = operator.methodcaller(name)\n",
+                    "from operator import attrgetter\nf = attrgetter(name)\n"):
+            with self.subTest(src=src):
+                self.assertEqual(kinds(py(src)), {"dynamic_code"})
+
+    def test_ordinary_uses_stay_clean(self):
+        for src in ("import os\nsep = os.sep\n",
+                    "from pathlib import Path\ndef f(p: Path) -> Path:\n    return p\n",
+                    "import pathlib\ndef f(p):\n    return isinstance(p, pathlib.Path)\n",
+                    "x: 'os' = 1\nv = getattr(obj, 'name', None)\n",
+                    "import operator\nf = operator.attrgetter('name')\n"):
+            with self.subTest(src=src):
+                self.assertEqual(kinds(py(src)), set())
 
 
 class Secrets(unittest.TestCase):

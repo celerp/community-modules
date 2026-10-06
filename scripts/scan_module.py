@@ -11,8 +11,11 @@ handlers, migrations) must be the module's own package, and the files it reads
 (locales) must be in the folder.
 
 Python is read with `ast`, names are resolved through the file's own imports,
-so `import os as o; o.system(...)` is seen as `os.system`. Test files are left
-out unless the module's own code imports them.
+so `import os as o; o.system(...)` is seen as `os.system`. Where the scan cannot
+follow a name (a module such as `os` stored or passed as a value, an attribute
+name built at runtime) it reports that instead. It is a heuristic: it reports
+the ordinary ways of doing these things, not every way code can hide them. Test
+files are left out unless the module's own code imports them.
 """
 from __future__ import annotations
 
@@ -155,6 +158,9 @@ DATA_NAMES = {"license", "licence", "copying", "notice", "readme", "changelog", 
 # and through them anything a module could import.
 INTROSPECTION = {"f_globals", "f_builtins", "f_locals", "f_back", "gi_frame", "cr_frame",
                  "ag_frame", "tb_frame", "__globals__", "__builtins__", "__subclasses__"}
+# Calls that take an attribute name; one built at runtime can reach any name.
+NAMED_ATTRIBUTE = {"getattr": slice(1, 2), "operator.attrgetter": slice(None),
+                   "operator.methodcaller": slice(0, 1)}
 MANIFEST = "PLUGIN_MANIFEST"
 ROUTE_KEYS = ("api_routes", "ui_routes")
 HANDLER_KEYS = ("handler", "render")
@@ -192,6 +198,23 @@ def _secret_config(name: str) -> bool:
     if name.startswith(CONFIG_FILE + "."):
         return True
     return name.startswith(UI_CONFIG + ".") and bool(SECRET_SETTING.search(name.split(".")[-1]))
+
+
+def _variants(name: str) -> list[str]:
+    """The name, and the standard modules a core package wrapper re-exports under it."""
+    parts = name.split(".")
+    if not _matches(name, CORE_PACKAGES):
+        return [name]
+    return [name, *(".".join(parts[i:]) for i in range(1, len(parts))
+                    if parts[i] in sys.stdlib_module_names)]
+
+
+# Modules and objects that hold a name the scan reports, such as os (os.system).
+# Passed on as a value, what is later called through them cannot be followed.
+HOLDERS = frozenset(".".join(n.split(".")[:i])
+                    for n in (*NETWORK, *PROCESS, *DYNAMIC, *SECRETS, *FILE_CALLS, *HTTPX_CALLS)
+                    for i in range(1, n.count(".") + 1))
+UNFOLLOWED = "passed on as a value, so the scan cannot follow what is called through it"
 
 
 def _names_tests(module: str) -> bool:
@@ -239,7 +262,7 @@ def _collect(node: ast.AST, scope: _Scope, scopes: dict[int, _Scope]) -> None:
         inner = scope
         if isinstance(child, _SCOPE_NODES):
             if not isinstance(child, ast.Lambda):
-                scope.bind(child.name, "value", None)
+                scope.bind(child.name, "value", child)
             inner = _Scope(scope)
             if not isinstance(child, ast.ClassDef):
                 a = child.args
@@ -268,7 +291,7 @@ def _collect(node: ast.AST, scope: _Scope, scopes: dict[int, _Scope]) -> None:
         elif isinstance(child, (ast.For, ast.AsyncFor, ast.comprehension)):
             _bind_targets(child.target, scope, None)
         elif isinstance(child, ast.withitem) and child.optional_vars is not None:
-            _bind_targets(child.optional_vars, scope, None)
+            _bind_targets(child.optional_vars, scope, child.context_expr)
         elif isinstance(child, ast.ExceptHandler) and child.name:
             scope.bind(child.name, "value", None)
         elif isinstance(child, (ast.Global, ast.Nonlocal)):
@@ -334,6 +357,28 @@ class _File:
                     and self._safe_parts(node.values[1:]))
         return False
 
+    def own_client(self, node: ast.AST, scope: _Scope, seen: frozenset = frozenset()) -> bool:
+        """True when an expression is an httpx client for Celerp's own API (OWN_API)."""
+        if isinstance(node, ast.Name):
+            owner, binds = scope.lookup(node.id)
+            if binds is None or (node.id, id(owner)) in seen:
+                return False
+            seen = seen | {(node.id, id(owner))}
+            return all(k == "value" and v is not None and self.own_client(v, owner, seen)
+                       for k, v in binds)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            inner = self.scopes.get(id(node.body[0]))
+            returns = [r.value for r in _own_returns(node)]
+            return bool(returns) and None not in returns and all(
+                self.own_client(r, inner, seen) for r in returns)
+        if not isinstance(node, ast.Call):
+            return False
+        name = self.resolve(node.func, scope)
+        if name in ("httpx.Client", "httpx.AsyncClient"):
+            base = next((k.value for k in node.keywords if k.arg == "base_url"), None)
+            return base is not None and self.resolve(base, scope) == OWN_API
+        return isinstance(node.func, ast.Name) and self.own_client(node.func, scope, seen)
+
     @staticmethod
     def _safe_parts(parts) -> bool:
         """No literal path part that leaves the folder or starts a new root."""
@@ -359,12 +404,7 @@ class _File:
     def check_name(self, name: str, node: ast.AST) -> None:
         if _secret_config(name):
             self.add("secrets", node, name)
-        parts = name.split(".")
-        names = [name]
-        if _matches(name, CORE_PACKAGES):
-            names += [".".join(parts[i:]) for i in range(1, len(parts))
-                      if parts[i] in sys.stdlib_module_names]
-        for n in names:
+        for n in _variants(name):
             if _matches(n, NETWORK):
                 self.add("network", node, name)
             if _matches(n, PROCESS):
@@ -374,11 +414,46 @@ class _File:
             if _matches(n, SECRETS):
                 self.add("secrets", node, name)
 
+    def check_value(self, name: str, node: ast.AST) -> None:
+        """A name used as a value: stored, packed, passed, returned or a default."""
+        for n in _variants(name):
+            if n in HOLDERS:
+                self.add("dynamic_code", node, f"{name} {UNFOLLOWED}")
+            elif _matches(n, FILE_CALLS):
+                self.add("files", node, f"{name} {UNFOLLOWED}")
+
+    def _followed(self) -> set[int]:
+        """Uses the scan follows: attribute reads, calls, annotations and type checks."""
+        ids: set[int] = set()
+        for n in ast.walk(self.tree):
+            if isinstance(n, ast.Attribute):
+                ids.add(id(n.value))
+            elif isinstance(n, ast.Call):
+                ids.add(id(n.func))
+                name = self.resolve(n.func, self.scopes.get(id(n), _Scope(None)))
+                if name in ("isinstance", "issubclass"):
+                    ids.update(id(a) for a in n.args[1:])
+                elif name in ("getattr", "hasattr") and len(n.args) >= 2 and isinstance(
+                        n.args[1], ast.Constant) and isinstance(n.args[1].value, str):
+                    ids.add(id(n.args[0]))
+            annotations = []
+            if isinstance(n, ast.arg):
+                annotations.append(n.annotation)
+            elif isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                annotations.append(n.returns)
+            elif isinstance(n, ast.AnnAssign):
+                annotations.append(n.annotation)
+            for a in annotations:
+                if a is not None:
+                    ids.update(id(x) for x in ast.walk(a))
+        return ids
+
     def scan(self) -> list[Finding]:
         bare_strings = {id(n.value) for n in ast.walk(self.tree)
                         if isinstance(n, ast.Expr) and isinstance(n.value, ast.Constant)}
         read_by_attribute = {id(n.value) for n in ast.walk(self.tree)
                              if isinstance(n, ast.Attribute)}
+        followed = self._followed()
         for node in ast.walk(self.tree):
             if ((isinstance(node, ast.Name) and node.id == MANIFEST
                  and id(node) not in self.manifest_literal)
@@ -398,12 +473,16 @@ class _File:
                 for alias in node.names:
                     self.check_name(node.module if alias.name == "*"
                                     else f"{node.module}.{alias.name}", node)
+                    if alias.name == "*":
+                        self.check_value(node.module, node)
             elif isinstance(node, (ast.Name, ast.Attribute)) and isinstance(node.ctx, ast.Load):
                 name = self.resolve(node, scope)
                 if name in SETTINGS_OBJECTS and id(node) not in read_by_attribute:
                     self.add("secrets", node, f"{name} used as a whole")
                 if name and (isinstance(node, ast.Attribute) or not _local_import(scope, node)):
                     self.check_name(name, node)
+                if name and id(node) not in followed:
+                    self.check_value(name, node)
             elif isinstance(node, ast.Call):
                 self.check_call(node, scope)
             elif (isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div)
@@ -427,21 +506,29 @@ class _File:
         if (isinstance(node.func, ast.Attribute) and node.func.attr in PATH_METHODS
                 and not self._safe_parts(node.args)):
             self.add("files", node, "a path that leaves its folder")
-        if name == "getattr" and len(node.args) >= 2 and not (
-                isinstance(node.args[1], ast.Constant) and isinstance(node.args[1].value, str)):
-            if self.resolve(node.args[0], scope) is not None:
-                self.add("dynamic_code", node, "getattr with a computed name")
-        if name in HTTPX_CALLS:
-            base = next((k.value for k in node.keywords if k.arg == "base_url"), None)
-            own = (name in ("httpx.Client", "httpx.AsyncClient") and base is not None
-                   and self.resolve(base, scope) == OWN_API)
-            if not own:
-                self.add("network", node, name)
+        if name in NAMED_ATTRIBUTE:
+            names = node.args[NAMED_ATTRIBUTE[name]]
+            computed = not names or not all(
+                isinstance(a, ast.Constant) and isinstance(a.value, str) for a in names)
+            # A request method picked by name on Celerp's own API client stays an API call.
+            if computed and not (name == "getattr" and self.own_client(node.args[0], scope)):
+                self.add("dynamic_code", node, f"{name} with a computed name")
+        if name in HTTPX_CALLS and not self.own_client(node, scope):
+            self.add("network", node, name)
         if _matches(name, FILE_CALLS):
             args = [*node.args, *(k.value for k in node.keywords if k.arg in PATH_KWARGS)]
             if not args or not all(self.rooted(a, scope) for a in args[:1]) \
                     or not self._safe_parts(args[1:]):
                 self.add("files", node, name)
+
+
+def _own_returns(func: ast.AST):
+    """The return statements of a function, not of the functions nested in it."""
+    for child in ast.iter_child_nodes(func):
+        if isinstance(child, ast.Return):
+            yield child
+        elif not isinstance(child, _SCOPE_NODES):
+            yield from _own_returns(child)
 
 
 def _local_import(scope: _Scope, node: ast.AST) -> bool:

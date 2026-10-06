@@ -8,8 +8,9 @@ Every feature in Celerp is a module; these are ones the community has shared.
 **This is an index, not a code host.** Each module lives in its author's own
 repository. Celerp does **not** review, host, sign, or warrant the modules
 listed here. **A listing is not an endorsement.** The automatic checks described
-under "List your module" make sure a listing matches its repository and
-declares what its code does; they are not a code review.
+under "List your module" make sure a listing matches its repository and look
+for code that does more than the listing declares. They are not a code review
+and cannot prove a module does only what it declares.
 
 Modules are third-party software that runs with the same access as Celerp
 itself. Treat one like anything else you install: read the code, or decide you
@@ -125,7 +126,13 @@ Celerp's data folder (`settings.data_dir`). It also checks that the routes, slot
 handlers, migrations and locale files your manifest names are your module's own
 package and files. Network calls your `network_calls`
 declares are fine. Anything else it finds is **flagged**: the pull request gets
-the `needs-review` label and waits for the maintainer.
+the `needs-review` label and waits for the maintainer. Code the scan cannot
+follow, such as a module like `os` stored in a variable or an attribute name
+built while the code runs, is flagged too.
+
+The scan reads the code without running it. It is a heuristic: it catches the
+ordinary ways of doing these things, but code written to hide from it can get
+past, so a passed check is not proof that a module does only what it declares.
 
 ### What happens next
 
