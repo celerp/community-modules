@@ -17,18 +17,22 @@ docstrings left out unless the file reads them back through `__doc__`. A web
 address counts with a scheme (`https://host/...`). One without a scheme
 (`//host/...`) counts when its host is an IPv6 address in brackets, or has a dot
 or colon with more of the host after it; a single word such as `//name/` does
-not. Text is read the way a browser reads an address, with markup and script
-escapes (`&#46;`, `\\x2e`) decoded, tab and newline characters dropped (and,
-separately, read as a space between two addresses), backslashes as slashes,
-look-alike characters folded, characters IDNA ignores dropped and
-percent-encoding decoded, before it is matched. An address or call built while
-the code runs is not followed. Where the scan cannot follow a name (a module
-such as `os` stored or passed as a value, an attribute name built at runtime) it
-reports that instead, as it does code that changes names in modules Python,
-Celerp or its libraries provide. It is a review aid, not a security boundary: it
-reports the ordinary ways of doing these things, not every way Python can reach
-a name, and a clean scan is not proof of what the code does. Test files are left
-out unless the module's own code imports them.
+not. Text is read the way a browser reads an address. Escapes are decoded in the
+language the text is written in (character references such as `&#46;` in markup,
+`\\x2e` in script, `\\2e` in style sheets, all three in strings built in
+Python), then tab and newline characters are dropped (and, separately, read as a
+space between two addresses), backslashes read as slashes, look-alike characters
+folded, characters IDNA ignores dropped and percent-encoding decoded as far as a
+browser decodes it, before the text is matched. Letters a browser folds that are
+newer than the Unicode data of Python 3.12, which the checks run on, are listed
+by hand, so letters added in a later Unicode version are not folded. An address
+or call built while the code runs is not followed. Where the scan cannot follow
+a name (a module such as `os` stored or passed as a value, an attribute name
+built at runtime) it reports that instead, as it does code that changes names in
+modules Python, Celerp or its libraries provide. It is a review aid, not a
+security boundary: it reports the ordinary ways of doing these things, not every
+way Python can reach a name, and a clean scan is not proof of what the code
+does. Test files are left out unless the module's own code imports them.
 """
 from __future__ import annotations
 
@@ -193,9 +197,17 @@ IGNORED = re.compile("[\u00ad\u034f\u115f\u1160\u17b4\u17b5\u180b-\u180f\u200b\u
                      "\U0001d173-\U0001d17a\U000e0100-\U000e01ef]")
 BROWSER_READS = str.maketrans({"\u3002": ".", "\\": "/", "\ua7f1": "s", **{
     chr(0x1ccd6 + i): c for i, c in enumerate("abcdefghijklmnopqrstuvwxyz0123456789")}})
-# Script escapes (\x2e, \u002e, \u{2e}) a script decodes before a browser reads the address;
-# an escaped backslash is kept as written, so it never starts an escape.
-SCRIPT_ESCAPE = re.compile(r"\\(?:x([0-9a-fA-F]{2})|u([0-9a-fA-F]{4})|u\{([0-9a-fA-F]{1,6})\}|\\)")
+# Escapes a language decodes before a browser reads an address written in it. Script
+# string escapes: \xHH, \uHHHH, \u{H...}, \n and the other control letters, a backslash
+# before a line break (dropped) and before any other character but a digit, x or u (that
+# character). Style sheet escapes: \ and 1 to 6 hex digits with one optional space after
+# them, or \ before any other character (that character). Markup reads character
+# references (&#46;, &period;) with the standard library.
+SCRIPT_ESCAPE = re.compile(r"\\(?:x([0-9a-fA-F]{2})|u([0-9a-fA-F]{4})|u\{([0-9a-fA-F]+)\}"
+                           r"|(\r\n|[^xu1-9]))")
+SCRIPT_CONTROLS = {"b": "\b", "f": "\f", "n": "\n", "r": "\r", "t": "\t", "v": "\v", "0": "\0",
+                   "\n": "", "\r": "", "\r\n": "", "\u2028": "", "\u2029": ""}
+STYLE_ESCAPE = re.compile(r"\\(?:([0-9a-fA-F]{1,6})(?:\r\n|[ \t\n\r\f])?|([^\n\r\f0-9a-fA-F]))")
 
 DATA_SUFFIXES = {
     ".md", ".txt", ".rst", ".json", ".toml", ".yaml", ".yml", ".cfg", ".ini", ".csv",
@@ -633,9 +645,9 @@ class _File:
                 self.add("files", node, "a path that leaves its folder")
             elif (isinstance(node, ast.Constant) and isinstance(node.value, (str, bytes))
                   and id(node) not in bare_strings):
-                # Script and HTML built in Python reach the browser like a .js file.
+                # Markup, script and style built in Python reach the browser like a page.
                 text = node.value if isinstance(node.value, str) else _bytes_text(node.value)
-                readings = _readings(text)
+                readings = _readings(text, PAGE_LANGUAGES)
                 if any(map(URL.search, readings)):
                     self.add("network", node, "a web address in the code")
                 elif any(map(JS_NETWORK.search, readings)):
@@ -852,31 +864,55 @@ def _bytes_text(data: bytes) -> str:
         return data.decode("latin-1")
 
 
-def _readings(text: str) -> tuple[str, str, str]:
-    """Text as written and as a browser reads it once markup (&#46;) and script (\\x2e)
-    escapes are decoded, with a line break dropped (inside one address: "ht\\ttps://") and
-    read as a space (between two, as in a list of addresses).
+def _readings(text: str, languages: tuple) -> tuple[str, ...]:
+    """Text as written, and each literal it holds (the text as one of its languages
+    decodes it) as a browser reads the address in it.
 
     The text as written is matched too, as dropping a line break joins the last word of a
     line to the next one ("x\\nfetch(u)" reads "xfetch(u)").
     """
-    unescaped = SCRIPT_ESCAPE.sub(_script_char, html.unescape(text))
-    return (text, *(_as_browser_reads(LINE_BREAK.sub(gap, unescaped)) for gap in ("", " ")))
+    literals = dict.fromkeys((text, *(decode(text) for decode in languages)))
+    return (text, *(reading for literal in literals for reading in _as_browser_reads(literal)))
+
+
+def _script_text(text: str) -> str:
+    return SCRIPT_ESCAPE.sub(_script_char, text)
 
 
 def _script_char(escape: re.Match[str]) -> str:
-    digits = escape[1] or escape[2] or escape[3]
-    return chr(int(digits, 16)) if digits and int(digits, 16) < 0x110000 else escape[0]
+    if digits := escape[1] or escape[2] or escape[3]:
+        return chr(int(digits, 16)) if int(digits, 16) < 0x110000 else escape[0]
+    return SCRIPT_CONTROLS.get(escape[4], escape[4])
 
 
-def _as_browser_reads(text: str) -> str:
-    """Text as a browser's URL parser reads it: look-alike characters folded (NFKC), the
-    ones IDNA ignores dropped, a backslash read as a slash and %XX decoded. A host is
-    decoded, folded and decoded again ("%EF%BC%852e" reads "\uff052e", "%2e", then ".")."""
-    text = _fold(text)
-    for _ in range(2):
-        text = _fold(unquote(text))
-    return text
+def _style_text(text: str) -> str:
+    return STYLE_ESCAPE.sub(_style_char, text)
+
+
+def _style_char(escape: re.Match[str]) -> str:
+    if not escape[1]:
+        return escape[2]
+    code = int(escape[1], 16)
+    return chr(code) if 0 < code < 0x110000 and not 0xd800 <= code < 0xe000 else "\ufffd"
+
+
+# The languages each page file is written in; markup holds script and style too.
+PAGE_LANGUAGES = (html.unescape, _script_text, _style_text)
+FILE_LANGUAGES = {".js": (_script_text,), ".mjs": (_script_text,), ".cjs": (_script_text,),
+                  ".css": (_style_text,)}
+
+
+def _as_browser_reads(literal: str) -> tuple[str, str]:
+    """A literal as a browser's URL parser reads it, with a line break dropped (inside one
+    address: "ht\\ttps://") and read as a space (between two, as in a list of addresses).
+
+    Chromium decodes %XX once and then maps the host as IDNA does (_fold). A % that mapping
+    makes from a fullwidth or small percent sign is decoded once more ("%EF%BC%852e" reads
+    "\uff052e", then "%2e", then "."). A % the first decode leaves ("%252e") and a third
+    level are not decoded, as the browser rejects those hosts.
+    """
+    return tuple("%".join(_fold(unquote(_fold(part))) for part in unquote(text).split("%"))
+                 for text in (LINE_BREAK.sub(gap, literal) for gap in ("", " ")))
 
 
 def _fold(text: str) -> str:
@@ -888,9 +924,10 @@ def _scan_script(path: str, data: bytes) -> list[Finding]:
         text = data.decode("utf-8")
     except UnicodeDecodeError:
         return [Finding("unreadable", path, 1, "not UTF-8 text")]
+    languages = FILE_LANGUAGES.get(PurePosixPath(path).suffix.lower(), PAGE_LANGUAGES)
     found = []
     for lineno, line in enumerate(text.splitlines(), 1):
-        readings = _readings(line)
+        readings = _readings(line, languages)
         if any(map(JS_NETWORK.search, readings)):
             found.append(Finding("network", path, lineno, "browser network call"))
         if any(map(JS_DYNAMIC.search, readings)):
