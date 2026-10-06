@@ -19,21 +19,20 @@ address counts with a scheme (`https://host/...`). One without a scheme
 or colon with more of the host after it; a single word such as `//name/` does
 not. Text is read the way a browser reads an address. Escapes are decoded in the
 language the text is written in (character references such as `&#46;` in markup,
-`\\x2e` in script, `\\2e` in style sheet strings and `url()`, all three in
-strings built in Python), then tab and newline characters are dropped (and,
-separately, read as a space between two addresses), backslashes read as slashes,
-look-alike characters folded, characters IDNA ignores dropped and
-percent-encoding decoded as far as a browser decodes it, before the text is
-matched. Letters a browser folds that are newer than the Unicode data of Python
-3.12, which the checks run on, are listed by hand, so letters added in a later
-Unicode version are not folded. An address or call built while the code runs is
-not followed. Where the scan cannot follow a name (a module such as `os` stored
-or passed as a value, an attribute name built at runtime) it reports that
-instead, as it does code that changes names in modules Python, Celerp or its
-libraries provide. It is a review aid, not a security boundary: it reports the
-ordinary ways of doing these things, not every way Python can reach a name, and
-a clean scan is not proof of what the code does. Test files are left out unless
-the module's own code imports them.
+`\\x2e` in script, `\\2e` in style sheets, all three in strings built in
+Python), then tab and newline characters are dropped (and, separately, read as a
+space between two addresses), backslashes read as slashes, look-alike characters
+folded, characters IDNA ignores dropped and percent-encoding decoded as far as a
+browser decodes it, before the text is matched. Letters a browser folds that are
+newer than the Unicode data of Python 3.12, which the checks run on, are listed
+by hand, so letters added in a later Unicode version are not folded. An address
+or call built while the code runs is not followed. Where the scan cannot follow
+a name (a module such as `os` stored or passed as a value, an attribute name
+built at runtime) it reports that instead, as it does code that changes names in
+modules Python, Celerp or its libraries provide. It is a review aid, not a
+security boundary: it reports the ordinary ways of doing these things, not every
+way Python can reach a name, and a clean scan is not proof of what the code
+does. Test files are left out unless the module's own code imports them.
 """
 from __future__ import annotations
 

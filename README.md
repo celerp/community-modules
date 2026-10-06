@@ -142,20 +142,20 @@ without a scheme (`//host/...`) counts when its host is an IPv6 address in
 brackets, or has a dot or colon with more of the host after it; a single word
 such as `//name/` does not. Text is read the way a browser reads an address.
 Escapes are decoded in the language the text is written in (character references
-such as `&#46;` in markup, `\x2e` in script, `\2e` in style sheet strings and
-`url()`, all three in strings built in Python), then tab and newline characters
-are dropped (and, separately, read as a space between two addresses),
-backslashes read as slashes, look-alike characters folded, characters IDNA
-ignores dropped and percent-encoding decoded as far as a browser decodes it,
-before the text is matched. Letters a browser folds that are newer than the
-Unicode data of Python 3.12, which the checks run on, are listed by hand, so
-letters added in a later Unicode version are not folded. An address or call
-built while the code runs, from pieces, variables or lookups, is not followed.
-It does not follow every way Python can reach a name, for example through
-attributes of other objects, private names inside standard modules, or binding
-orders Python resolves differently than the scan reads them, so a passed check
-is not proof that a module does only what it declares. Anything it cannot follow
-is left to a human reviewer.
+such as `&#46;` in markup, `\x2e` in script, `\2e` in style sheets, all three in
+strings built in Python), then tab and newline characters are dropped (and,
+separately, read as a space between two addresses), backslashes read as slashes,
+look-alike characters folded, characters IDNA ignores dropped and
+percent-encoding decoded as far as a browser decodes it, before the text is
+matched. Letters a browser folds that are newer than the Unicode data of Python
+3.12, which the checks run on, are listed by hand, so letters added in a later
+Unicode version are not folded. An address or call built while the code runs,
+from pieces, variables or lookups, is not followed. It does not follow every way
+Python can reach a name, for example through attributes of other objects,
+private names inside standard modules, or binding orders Python resolves
+differently than the scan reads them, so a passed check is not proof that a
+module does only what it declares. Anything it cannot follow is left to a human
+reviewer.
 
 ### What happens next
 
