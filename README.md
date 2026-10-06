@@ -119,10 +119,11 @@ text and never runs anything from either. A listing pull request must:
   `PLUGIN_MANIFEST`) and use `"tier": "community"`. The `verified` and
   `official` tiers are set by the maintainer of this directory.
 
-The check also scans the module's code for network calls, starting other
-programs, running code built or loaded at runtime, reading environment
-variables, credentials or Celerp's secret settings, and file access outside
-Celerp's data folder (`settings.data_dir`). It also checks that the routes, slot
+The check also scans the module's code, including the browser code in its
+scripts and pages and in strings its Python builds them from, for network calls,
+starting other programs, running code built or loaded at runtime, reading
+environment variables, credentials or Celerp's secret settings, and file access
+outside Celerp's data folder (`settings.data_dir`). It also checks that the routes, slot
 handlers, migrations and locale files your manifest names are your module's own
 package and files. Calls to Celerp's module API (`celerp.modules.api`, such as
 `api_request`) are not findings. Anything the scan finds is **flagged**: the
