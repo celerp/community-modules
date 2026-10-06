@@ -106,6 +106,26 @@ class Network(unittest.TestCase):
     def test_browser_dynamic_code_in_python_strings(self):
         self.assertEqual(kinds(py("s = f'eval({x})'\n")), {"dynamic_code"})
 
+    def test_browser_code_in_python_bytes(self):
+        for name, src in {
+            "decoded": "from fasthtml.common import Script\n"
+                       "s = Script(b\"fetch('//x.example/a')\".decode())\n",
+            "raw": "s = rb'new WebSocket(u)'.decode()\n",
+        }.items():
+            with self.subTest(name):
+                self.assertEqual(kinds(py(src)), {"network"})
+        self.assertEqual(kinds(py("s = b'eval(src)'.decode()\n")), {"dynamic_code"})
+
+    def test_docstring_read_back_is_scanned(self):
+        # A docstring the module reads back through __doc__ can reach the page.
+        for name, src in {
+            "function": "def js():\n    \"fetch(u)\"\ns = js.__doc__\n",
+            "module": "\"\"\"fetch(u)\"\"\"\ns = __doc__\n",
+            "getattr": "class J:\n    \"fetch(u)\"\ns = getattr(J, '__doc__')\n",
+        }.items():
+            with self.subTest(name):
+                self.assertEqual(kinds(py(src)), {"network"})
+
     def test_browser_code_in_docstring_is_not_a_call(self):
         self.assertEqual(kinds(py('def f():\n    """Calls fetch(url) in the page."""\n')),
                          set())
