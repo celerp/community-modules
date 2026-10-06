@@ -340,6 +340,15 @@ class Flags(Case):
         self.assertTrue(any("acme_widgets/sync.py" in f for f in result.flags), result.flags)
         self.assertFalse(any("network_calls" in f for f in result.flags), result.flags)
 
+    def test_browser_fetch_built_in_python_is_flagged(self):
+        self.gh.downloads[archive_url()] = module_zip(module_files(extra={
+            "acme-widgets/acme_widgets/page.py":
+                "from fasthtml.common import Script\n"
+                "def page(u):\n    return Script(f\"fetch('//' + {u})\")\n"}))
+        result = self.run_review()
+        self.assertEqual((result.status, result.problems), ("flag", []))
+        self.assertTrue(any("acme_widgets/page.py" in f for f in result.flags), result.flags)
+
     def test_process_spawn_is_flagged_even_with_network_declared(self):
         self.gh.downloads[archive_url()] = module_zip(module_files(extra={
             "acme-widgets/acme_widgets/run.py": "import subprocess\n"}))

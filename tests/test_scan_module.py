@@ -87,6 +87,29 @@ class Network(unittest.TestCase):
         files["static/app.js"] = "fetch('/x').then(r => r.json())\n"
         self.assertEqual(kinds(files), {"network"})
 
+    def test_browser_code_in_python_strings(self):
+        # Script and HTML the module builds in Python reach the browser like a .js file.
+        for name, src in {
+            "protocol-relative fetch": "from fasthtml.common import Script\n"
+                                       "s = Script(\"fetch('//x.example/a')\")\n",
+            "f-string fetch": "from fasthtml.common import Script\n"
+                              "def f(url):\n    return Script(f\"fetch({url})\")\n",
+            "implicit concatenation": "s = 'fe' 'tch(u)'\n",
+            "XMLHttpRequest": "s = 'new XMLHttpRequest()'\n",
+            "WebSocket": "s = 'new WebSocket(u)'\n",
+            "sendBeacon": "s = 'navigator.sendBeacon(u, d)'\n",
+            "EventSource": "s = 'new EventSource(u)'\n",
+        }.items():
+            with self.subTest(name):
+                self.assertEqual(kinds(py(src)), {"network"})
+
+    def test_browser_dynamic_code_in_python_strings(self):
+        self.assertEqual(kinds(py("s = f'eval({x})'\n")), {"dynamic_code"})
+
+    def test_browser_code_in_docstring_is_not_a_call(self):
+        self.assertEqual(kinds(py('def f():\n    """Calls fetch(url) in the page."""\n')),
+                         set())
+
 
 class Process(unittest.TestCase):
     def test_subprocess(self):
