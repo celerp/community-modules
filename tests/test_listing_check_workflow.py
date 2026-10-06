@@ -9,6 +9,7 @@ from fakes import ROOT
 WORKFLOWS = ROOT / ".github" / "workflows"
 CHECK = WORKFLOWS / "listing-check.yml"
 DEFAULT_BRANCH = "${{ github.event.repository.default_branch }}"
+INSTALL = "pip install --quiet --require-hashes -r scripts/requirements.txt"
 
 
 def steps(text: str) -> list[str]:
@@ -71,7 +72,7 @@ class ListingCheck(unittest.TestCase):
             self.assertNotIn("${{", line)
 
     def test_runs_only_default_branch_scripts(self):
-        allowed = re.compile(r'pip install --quiet "jsonschema>=4"$|'
+        allowed = re.compile(re.escape(INSTALL) + r'$|'
                              r'python3 scripts/[a-z_]+\.py( "\$RUNNER_TEMP/result\.json")?$')
         for line in run_lines(self.text):
             self.assertRegex(line.strip(), allowed)
@@ -88,6 +89,28 @@ class ListingCheck(unittest.TestCase):
     def test_only_pull_requests_into_the_default_branch(self):
         self.assertIn("if: github.event.pull_request.base.ref == "
                       "github.event.repository.default_branch", self.text)
+
+
+class PinnedDependencies(unittest.TestCase):
+    """The scripts' dependencies are installed at exact versions checked by hash."""
+
+    def test_every_workflow_installs_only_the_hashed_requirements(self):
+        for workflow in ("listing-check.yml", "ci.yml"):
+            with self.subTest(workflow=workflow):
+                text = (WORKFLOWS / workflow).read_text(encoding="utf-8")
+                installs = [line.strip() for line in run_lines(text) if "pip" in line]
+                self.assertEqual(installs, [INSTALL])
+
+    def test_every_requirement_is_an_exact_version_with_hashes(self):
+        text = (ROOT / "scripts" / "requirements.txt").read_text(encoding="utf-8")
+        entries = [e.strip() for e in re.split(r"\n(?=\S)", text)
+                   if e.strip() and not e.startswith("#")]
+        self.assertIn("jsonschema", {e.split("==")[0] for e in entries})
+        for entry in entries:
+            with self.subTest(entry=entry.split()[0]):
+                self.assertRegex(entry, r"^[A-Za-z0-9._-]+==[A-Za-z0-9.]+ \\\n")
+                self.assertRegex(entry, r"--hash=sha256:[0-9a-f]{64}")
+                self.assertNotRegex(entry, r"[<>~!]=|>|<")
 
 
 class CatalogValidation(unittest.TestCase):
