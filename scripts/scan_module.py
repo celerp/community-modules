@@ -12,13 +12,14 @@ handlers, migrations) must be the module's own package, and the files it reads
 
 Python is read with `ast`, names are resolved through the file's own imports,
 so `import os as o; o.system(...)` is seen as `os.system`. Browser code is read
-in script and page files and in the module's Python strings, docstrings left
-out. Where the scan cannot follow a name (a module such as `os` stored or passed
-as a value, an attribute name built at runtime) it reports that instead, as it does code that changes
-names in modules Python, Celerp or its libraries provide. It is a review aid,
-not a security boundary: it reports the ordinary ways of doing these things, not
-every way Python can reach a name, and a clean scan is not proof of what the
-code does. Test files are left out unless the module's own code imports them.
+in script and page files and in the module's Python strings and bytes,
+docstrings left out. Where the scan cannot follow a name (a module such as `os`
+stored or passed as a value, an attribute name built at runtime) it reports that
+instead, as it does code that changes names in modules Python, Celerp or its
+libraries provide. It is a review aid, not a security boundary: it reports the
+ordinary ways of doing these things, not every way Python can reach a name, and
+a clean scan is not proof of what the code does. Test files are left out unless
+the module's own code imports them.
 """
 from __future__ import annotations
 
@@ -583,14 +584,15 @@ class _File:
             elif (isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div)
                   and not self._safe_parts([node.right])):
                 self.add("files", node, "a path that leaves its folder")
-            elif (isinstance(node, ast.Constant) and isinstance(node.value, str)
+            elif (isinstance(node, ast.Constant) and isinstance(node.value, (str, bytes))
                   and id(node) not in bare_strings):
                 # Script and HTML built in Python reach the browser like a .js file.
-                if URL.search(node.value):
+                text = node.value if isinstance(node.value, str) else node.value.decode("latin-1")
+                if URL.search(text):
                     self.add("network", node, "a web address in the code")
-                elif JS_NETWORK.search(node.value):
+                elif JS_NETWORK.search(text):
                     self.add("network", node, "browser network call")
-                if JS_DYNAMIC.search(node.value):
+                if JS_DYNAMIC.search(text):
                     self.add("dynamic_code", node, "code built at runtime")
         return self.findings
 
