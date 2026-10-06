@@ -163,11 +163,22 @@ BAD_SEGMENT = re.compile(r"(^|[/\\])\.\.([/\\]|$)|^[/\\]|^[A-Za-z]:|^~")
 # user name up to the last @. The host runs to the first space or / \ ? # ' " ` < > ( ),
 # or the end. It is an address when it holds a letter or digit, and a [ or a dot or :
 # followed by something other than . , ; : ! ("//done." and "//TODO: x" are text). A
-# dot is also the 。 ． ｡ browsers read as one, or a percent-encoded dot. A host followed
-# by ( is a call, as in "//console.log(x)", and "a // b" or a single word ("//intranet/")
-# is not an address.
+# dot is also the 。 ． ｡ browsers read as one, or a percent-encoded dot, which browsers
+# also read in fullwidth characters, with ﹪ or ％ as the percent sign, and with tab or
+# newline characters inside. A host followed by ( is a call, as in "//console.log(x)",
+# and "a // b" or a single word ("//intranet/") is not an address.
 FULL_STOPS = "\u3002\uff0e\uff61"
-DOT = rf"(?:[.:{FULL_STOPS}]|%(?:2e|e3%80%82|ef%bc%8e|ef%bd%a1))"
+PERCENT_SIGNS = "%\ufe6a\uff05"
+
+
+def _encoded(code: str) -> str:
+    """A pattern for a percent-encoded code in ASCII or fullwidth, tab or newline anywhere."""
+    return r"[\t\n\r]*".join(f"[{PERCENT_SIGNS}]" if c == "%" else f"[{c}{chr(ord(c) + 0xFEE0)}]"
+                              for c in code)
+
+
+DOT = (rf"(?:[.:{FULL_STOPS}]|"
+       + "|".join(map(_encoded, ("%2e", "%e3%80%82", "%ef%bc%8e", "%ef%bd%a1"))) + ")")
 USER_CHAR = r"(?:[\t\n\r]|[^\s/\\?#])"
 HOST_CHAR = r"(?:[\t\n\r]|[^\s/\\?#'\"`<>()])"
 NETWORK_PATH = (rf"(?<![\w:/.\\])//(?:[\t\n\r]*[/\\])*"
