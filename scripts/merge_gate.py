@@ -5,6 +5,11 @@ Runs from the default branch when the "Validate catalog" workflow finishes for
 a pull request. It never checks out or runs pull request content: it reads the
 check's result artifact and the pull request through the GitHub API.
 
+Each run, and an hourly scheduled run, handles every open pull request whose
+latest completed check has no outcome yet, not only the one that triggered it. The outcome comment records
+the check run it answers, so a check is handled once even when the run that
+was started for it never ran.
+
 The result artifact is used only when the pull request changes nothing but
 index.json and README.md, so the check that produced it ran this repository's
 own scripts. A pull request is squash-merged only when all of these hold:
@@ -30,6 +35,7 @@ FLAG_LABEL = "needs-review"
 MARKER = "<!-- listing-check -->"
 BOT_LOGIN = "github-actions[bot]"
 CHECK_WORKFLOW = ".github/workflows/ci.yml"
+CHECK_RUNS = "/actions/workflows/ci.yml/runs?event=pull_request&head_sha={sha}&per_page=100"
 ARTIFACT = "submission-result"
 MAX_ARTIFACT_BYTES = 1024 * 1024
 MAX_COMMENT_CHARS = 60_000
@@ -67,71 +73,104 @@ def _artifact_result(gh, base: str, run_id: int) -> dict | None:
     return result if isinstance(result, dict) else None
 
 
-def _upsert_comment(gh, base: str, number: int, text: str) -> None:
-    body = f"{MARKER}\n{text[:MAX_COMMENT_CHARS]}"
+def _latest_check(gh, base: str, head: str) -> dict | None:
+    """The newest check run for this head, or None while it has not completed."""
+    runs = [r for r in gh.get(base + CHECK_RUNS.format(sha=head)).get("workflow_runs", [])
+            if r.get("path") == CHECK_WORKFLOW and r.get("event") == "pull_request"
+            and r.get("head_sha") == head]
+    if not runs:
+        return None
+    latest = max(runs, key=lambda r: r["id"])
+    return latest if latest.get("status") == "completed" else None
+
+
+def _run_marker(run: dict) -> str:
+    return f"<!-- listing-run: {run['id']}.{run.get('run_attempt', 1)} -->"
+
+
+def _gate_comment(gh, base: str, number: int) -> dict | None:
     for c in gh.paged(f"{base}/issues/{number}/comments?per_page=100"):
         if (c.get("user") or {}).get("login") == BOT_LOGIN and MARKER in (c.get("body") or ""):
-            gh.patch(f"{base}/issues/comments/{c['id']}", {"body": body})
-            return
-    gh.post(f"{base}/issues/{number}/comments", {"body": body})
+            return c
+    return None
 
 
-def _handle_pr(gh, base: str, default: str, number: int, run: dict,
-               maintainers: set[str]) -> None:
+def _handle_pr(gh, base: str, default: str, number: int, maintainers: set[str]) -> None:
     pr = gh.get(f"{base}/pulls/{number}")
-    head = run["head_sha"]
     if (pr.get("state") != "open" or pr["base"]["ref"] != default
-            or is_maintainer(pr["user"]["login"], pr.get("author_association", ""), maintainers)
-            or pr["head"]["sha"] != head):
+            or is_maintainer(pr["user"]["login"], pr.get("author_association", ""), maintainers)):
         return
+    head = pr["head"]["sha"]
+    run = _latest_check(gh, base, head)
+    if run is None:
+        return
+    existing = _gate_comment(gh, base, number)
+    if existing and _run_marker(run) in (existing.get("body") or ""):
+        return
+
+    def say(text: str) -> None:
+        """Write the outcome into this pull request's one gate comment."""
+        nonlocal existing
+        body = f"{MARKER}\n{_run_marker(run)}\n{text[:MAX_COMMENT_CHARS]}"
+        if existing and existing.get("id"):
+            gh.patch(f"{base}/issues/comments/{existing['id']}", {"body": body})
+        else:
+            existing = gh.post(f"{base}/issues/{number}/comments", {"body": body})
+
     names = set()
     for f in gh.paged(f"{base}/pulls/{number}/files?per_page=100"):
         names.add(f["filename"])
         if f.get("previous_filename"):
             names.add(f["previous_filename"])
     if not names <= set(LISTING_FILES) or "index.json" not in names:
-        _upsert_comment(gh, base, number, OTHER_FILES)
+        say(OTHER_FILES)
         return
     result = _artifact_result(gh, base, run["id"])
     if (result is None or result.get("pr") != number or result.get("head_sha") != head
             or result.get("status") not in STATUSES
             or not isinstance(result.get("comment"), str)
             or not isinstance(result.get("base_sha"), str)):
-        _upsert_comment(gh, base, number, DID_NOT_FINISH)
+        say(DID_NOT_FINISH)
         return
     status = result["status"]
     if status == "fail":
-        _upsert_comment(gh, base, number, result["comment"])
+        say(result["comment"])
         return
     if run.get("conclusion") != "success":
-        _upsert_comment(gh, base, number, DID_NOT_FINISH)
+        say(DID_NOT_FINISH)
         return
     if status == "flag":
         gh.post(f"{base}/issues/{number}/labels", {"labels": [FLAG_LABEL]})
-        _upsert_comment(gh, base, number, result["comment"])
+        say(result["comment"])
         return
     if any(label.get("name") == FLAG_LABEL for label in pr.get("labels", [])):
         return
     if gh.get(f"{base}/branches/{default}")["commit"]["sha"] != result["base_sha"]:
-        _upsert_comment(gh, base, number, BRANCH_MOVED)
+        say(BRANCH_MOVED)
         return
-    _upsert_comment(gh, base, number, result["comment"])
+    say(result["comment"])
     try:
         gh.put(f"{base}/pulls/{number}/merge", {"merge_method": "squash", "sha": head})
     except ApiError:
-        _upsert_comment(gh, base, number, NOT_MERGED)
+        say(NOT_MERGED)
 
 
 def handle(event: dict, repo: str, gh, maintainers: set[str] = frozenset()) -> None:
     """maintainers: the lowercased logins in the default branch's CODEOWNERS."""
-    run = event.get("workflow_run") or {}
-    if run.get("event") != "pull_request" or run.get("path") != CHECK_WORKFLOW:
+    run = event.get("workflow_run")
+    if run is not None and (run.get("event") != "pull_request"
+                            or run.get("path") != CHECK_WORKFLOW):
         return
     base = f"/repos/{repo}"
     default = gh.get(base)["default_branch"]
+    errors = []
     for pr in gh.paged(f"{base}/pulls?state=open&per_page=100"):
-        if pr["head"]["sha"] == run["head_sha"]:
-            _handle_pr(gh, base, default, pr["number"], run, maintainers)
+        try:
+            _handle_pr(gh, base, default, pr["number"], maintainers)
+        except ApiError as exc:
+            errors.append(f"#{pr['number']}: {exc}")
+    if errors:
+        raise ApiError("; ".join(errors))
 
 
 def main() -> int:

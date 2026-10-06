@@ -1,13 +1,16 @@
 name: Merge listing
 
 # Runs from the default branch after "Validate catalog" finishes for a pull
-# request. It never checks out or runs pull request content: it runs this
-# repository's merge_gate.py, which reads the check's result and the pull
-# request through the GitHub API and merges only a clean, current pass.
+# request, and hourly. It never checks out or runs pull request content: it
+# runs this repository's merge_gate.py, which reads the check's result and the
+# pull request through the GitHub API and merges only a clean, current pass.
+# Every run handles each open pull request whose latest check has no outcome yet.
 on:
   workflow_run:
     workflows: [Validate catalog]
     types: [completed]
+  schedule:
+    - cron: "17 * * * *"
 
 permissions:
   contents: write
@@ -16,13 +19,15 @@ permissions:
   actions: read
 
 # One at a time, so each merge is checked against the catalog it lands on.
+# GitHub keeps only the newest waiting run; since every run handles all open
+# pull requests, the waiting runs it replaces are covered by it.
 concurrency:
   group: listing-merge
   cancel-in-progress: false
 
 jobs:
   merge:
-    if: github.event.workflow_run.event == 'pull_request'
+    if: github.event_name == 'schedule' || github.event.workflow_run.event == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
