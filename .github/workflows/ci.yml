@@ -1,6 +1,7 @@
 name: Validate catalog
 
-# Runs this repository's tests and validates index.json (schema + policy rules).
+# Runs this repository's tests and validates the catalog: index-v2.json (schema +
+# policy rules) and index.json (the earlier format, kept empty).
 # Read-only. Listing pull requests are checked by the "Listing check" workflow,
 # and the README table is rebuilt after each push to main by "Rebuild README".
 on:
@@ -23,5 +24,9 @@ jobs:
           python-version: "3.12"
       - run: pip install --quiet --require-hashes -r scripts/requirements.txt
       - run: python3 scripts/validate_index.py --selftest
+      # The template, for the tests of the template lint the listing check runs.
+      - run: git clone --quiet --filter=blob:none https://github.com/celerp/celerp-module-template "$RUNNER_TEMP/template"
       - run: python3 -m unittest discover -s tests -t tests
+        env:
+          TEMPLATE: ${{ runner.temp }}/template
       - run: python3 scripts/validate_index.py
