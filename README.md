@@ -61,13 +61,20 @@ publish it in **your own** public repository, then open a pull request here that
 adds one entry to [`index.json`](index.json). The pull request changes nothing
 else: the table above is rebuilt from `index.json` after every merge.
 
-You can do all of it in a browser, or have ChatGPT or Claude do it for you
-through its GitHub connector:
+You can do all of it in a browser:
 
 1. Open [`index.json`](index.json) and click the pencil (**Edit this file**).
    GitHub forks this repository into your account for you.
 2. Add your entry (below) in its place, then click **Commit changes...**,
    **Propose changes**, and **Create pull request**.
+
+With ChatGPT or Claude, fork this repository yourself first (**Fork**, then
+**Create fork**), because a chat's GitHub connector cannot fork. The chat then
+commits your entry to a new branch of your fork and opens the pull request. If
+it cannot open a pull request across forks, open
+`https://github.com/celerp/community-modules/compare/main...<you>:community-modules:<branch>?expand=1`
+with your username and the chat's branch filled in, and click
+**Create pull request**.
 
 From a terminal, the same thing is a fork, one commit that changes
 `index.json`, and a pull request against `main`;
