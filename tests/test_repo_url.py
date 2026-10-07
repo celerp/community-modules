@@ -84,7 +84,10 @@ REJECTED = (
 
 
 def problems(repo: str) -> list[str]:
-    doc = {"schema_version": 1, "modules": [dict(copy.deepcopy(ENTRY), repo=repo)]}
+    # A community entry's author is its repository's owner.
+    owner = repo.split("/")[3] if repo.count("/") >= 3 else "A"
+    doc = {"schema_version": 2,
+           "modules": [dict(copy.deepcopy(ENTRY), repo=repo, author=owner or "A")]}
     return check(doc)
 
 

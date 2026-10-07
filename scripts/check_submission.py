@@ -2,8 +2,8 @@
 """Check a listing pull request before it can be merged automatically.
 
 A listing pull request adds or updates exactly one community entry in
-index.json and changes nothing else; README.md is rebuilt from index.json after
-the merge (.github/workflows/readme.yml). This script checks the entry, the
+index-v2.json and changes nothing else; README.md is rebuilt from index-v2.json
+after the merge (.github/workflows/readme.yml). This script checks the entry, the
 creator's repository at the entry's pinned commit, and the module's code in
 that commit's archive. The module's code is read as data: its manifest is
 parsed, never imported, and nothing in the archive is run. The module
@@ -13,8 +13,9 @@ not finished are noted in the comment without changing the outcome.
 The outcome is one of:
   pass        every check passed; the merge workflow may merge it
   fail        something must change; the comment says what
-  flag        checks passed, but the code does something the listing does not
-              declare, so a maintainer reviews it first
+  flag        checks passed, but a maintainer reviews it first: the code does
+              something a maintainer always reviews, the repository's license is
+              not one GitHub recognizes, or a name uses characters outside ASCII
   maintainer  opened by a maintainer; reviewed by hand, never merged by a bot
 
 In CI, `check_submission.py <result.json>` runs from a checkout of the default
@@ -41,7 +42,7 @@ import zipfile
 from dataclasses import dataclass, field
 
 from github_api import ApiError, GitHub, NotFound, TooLarge
-from listing import CODEOWNERS, LISTING_FILES, code_owners, is_maintainer
+from listing import CATALOG, CODEOWNERS, LISTING_FILES, code_owners, is_maintainer
 from scan_module import KINDS, manifest_node, read_manifest, scan_folder
 from validate_index import REPO_URL, check as validate
 
@@ -99,11 +100,11 @@ def _scope_problems(changed: list[str]) -> list[str]:
     if others:
         problems.append(
             f"This pull request changes {', '.join(_q(p) for p in others)}. A listing pull "
-            "request may change only index.json; README.md is rebuilt from it after the "
+            f"request may change only {CATALOG}; README.md is rebuilt from it after the "
             "merge. Take the other changes out of this pull request.")
-    if "index.json" not in changed:
-        problems.append("This pull request does not change index.json. Add or update your "
-                        "module's entry in index.json.")
+    if CATALOG not in changed:
+        problems.append(f"This pull request does not change {CATALOG}. Add or update your "
+                        f"module's entry in {CATALOG}.")
     return problems
 
 
@@ -116,7 +117,7 @@ def _changed_entry(base: dict, head: dict) -> tuple[dict, dict | None, list[str]
     touched = [mid for mid, m in after.items() if before.get(mid) != m]
     if len(touched) != 1:
         problems.append(
-            "A listing pull request must add or update exactly one entry in index.json; "
+            f"A listing pull request must add or update exactly one entry in {CATALOG}; "
             f"this one changes {len(touched)}"
             + (f" ({', '.join(_q(t) for t in touched)})" if touched else "")
             + ". Open one pull request per module.")
@@ -156,6 +157,12 @@ def _celerp_name_problems(labels: dict[str, str]) -> list[str]:
             for label, value in labels.items() if "celerp" in _norm(value)]
 
 
+def _non_ascii_flags(labels: dict[str, str]) -> list[str]:
+    return [f"The {label} {_q(value)} has characters outside ASCII; a maintainer reviews "
+            "every such name before it is listed."
+            for label, value in labels.items() if not str(value).isascii()]
+
+
 def _taken_name_problems(entry: dict, index: dict) -> list[str]:
     problems = []
     mid, name = entry["id"], entry["name"]
@@ -176,7 +183,8 @@ def _taken_name_problems(entry: dict, index: dict) -> list[str]:
 
 # ── the creator's repository ─────────────────────────────────────────────────
 
-def _repo_problems(entry: dict, gh) -> tuple[str, str, list[str]]:
+def _repo_problems(entry: dict, gh) -> tuple[str, str, list[str], list[str]]:
+    """The repository's owner and name, its problems, and its flags."""
     owner, name = REPO_URL.fullmatch(entry["repo"]).groups()
     sha = entry["commit"]
     try:
@@ -189,7 +197,7 @@ def _repo_problems(entry: dict, gh) -> tuple[str, str, list[str]]:
     if str(info.get("full_name", "")).lower() != f"{owner}/{name}".lower():
         raise _Stop([f"repo {_q(entry['repo'])} now points to {_q(info.get('full_name'))}. "
                      "Set repo to the repository's current address."])
-    problems = []
+    problems, flags = [], []
     default = info.get("default_branch") or "main"
     try:
         compare = gh.get(f"/repos/{owner}/{name}/compare/{default}...{sha}")
@@ -207,10 +215,13 @@ def _repo_problems(entry: dict, gh) -> tuple[str, str, list[str]]:
         problems.append("The repository has no license file at this commit. Add a LICENSE "
                         "file that matches the license in your entry.")
     else:
-        if spdx and spdx != "NOASSERTION" and spdx.lower() != entry["license"].lower():
+        if not spdx or spdx == "NOASSERTION":
+            flags.append(f"The repository's license file is not a license GitHub recognizes, "
+                         f"so a maintainer reviews it against {_q(entry['license'])}.")
+        elif spdx.lower() != entry["license"].lower():
             problems.append(f"The repository's license is {_q(spdx)} but the entry says "
                             f"{_q(entry['license'])}. Make them the same.")
-    return owner, name, problems
+    return owner, name, problems, flags
 
 
 def _is_manifest(data: bytes) -> bool:
@@ -318,20 +329,20 @@ def review(*, base: dict, head: dict, changed: list[str], author: str, associati
     notes: list[str] = []
     try:
         try:
-            head_index = json.loads(head["index.json"])
-            base_index = json.loads(base["index.json"])
+            head_index = json.loads(head[CATALOG])
+            base_index = json.loads(base[CATALOG])
         except ValueError as exc:
-            raise _Stop([f"index.json is not valid JSON: {exc}"]) from None
+            raise _Stop([f"{CATALOG} is not valid JSON: {exc}"]) from None
         invalid = validate(head_index)
         if invalid:
-            raise _Stop([f"index.json: {p}" for p in invalid])
+            raise _Stop([f"{CATALOG}: {p}" for p in invalid])
         entry, old, found = _changed_entry(base_index, head_index)
         entry_id = entry["id"]
         problems += found
         problems += _ownership_problems(entry, old, author)
         problems += _celerp_name_problems({"id": entry["id"], "name": entry["name"]})
         problems += _taken_name_problems(entry, head_index)
-        owner, name, found = _repo_problems(entry, gh)
+        owner, name, found, flags = _repo_problems(entry, gh)
         problems += found
         try:
             archive = gh.download(f"https://codeload.github.com/{owner}/{name}/zip/"
@@ -346,9 +357,10 @@ def review(*, base: dict, head: dict, changed: list[str], author: str, associati
         files = _module_files(archive, entry_id)
         manifest, found = _module_problems(entry, files, lint)
         problems += found
-        problems += _celerp_name_problems(
-            {"display_name in the manifest": str(manifest.get("display_name", ""))})
-        flags = _flags(entry, files)
+        display = {"display_name in the manifest": str(manifest.get("display_name", ""))}
+        problems += _celerp_name_problems(display)
+        flags += _non_ascii_flags({"name": entry["name"], **display})
+        flags += _flags(entry, files)
         notes = _module_check_notes(gh, owner, name, entry["commit"])
     except _Stop as stop:
         problems += stop.args[0]
@@ -376,7 +388,7 @@ def _module_check_notes(gh, owner: str, name: str, sha: str) -> list[str]:
         notes.append(f"Your repository's own checks failed at this commit: "
                      f"{', '.join(_q(n) for n in failed)}. The listing does not depend on "
                      "them, but people who install the module get this commit, so fix the "
-                     "module and update `commit` in this pull request's index.json.")
+                     f"module and update `commit` in this pull request's {CATALOG}.")
     if waiting:
         notes.append(f"Your repository's own checks had not finished at this commit when "
                      f"this check ran: {', '.join(_q(n) for n in waiting)}.")
@@ -393,15 +405,15 @@ def comment(result: Result) -> str:
         return ("## Listing check: changes needed\n\n"
                 "This listing cannot be merged yet. Fix each item below: a fix to the module "
                 "goes in your module's repository, and then `commit` in this pull request's "
-                "index.json is set to the new commit. A fix to the entry is a change to "
-                "index.json in this pull request. The check runs again on every change to "
+                f"{CATALOG} is set to the new commit. A fix to the entry is a change to "
+                f"{CATALOG} in this pull request. The check runs again on every change to "
                 "this pull request.\n\n" + _bullets(result.problems) + "\n" + notes)
     if result.status == "flag":
         return ("## Listing check: waiting for the maintainer\n\n"
-                "Every required check passed, but the module's code does the things below, "
-                "which a maintainer reviews before it is listed. If your entry should declare "
-                "something (for example a network call in network_calls), update it in this "
-                "pull request's index.json; otherwise nothing is needed from you.\n\n"
+                "Every required check passed, but a maintainer reviews the things below "
+                "before the module is listed. If your entry should declare something (for "
+                "example a network call in network_calls), update it in this pull request's "
+                f"{CATALOG}; otherwise nothing is needed from you.\n\n"
                 + _bullets(result.flags) + "\n" + notes)
     if result.status == "maintainer":
         return ("## Listing check: maintainer pull request\n\n"

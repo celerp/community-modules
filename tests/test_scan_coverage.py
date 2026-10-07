@@ -6,11 +6,12 @@ ones the scan reports when written plainly (os.getenv reads the environment).
 """
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import unittest
 
-import fakes  # noqa: F401  (puts scripts/ on the path)
+from fakes import ROOT
 from scan_module import scan_folder
 
 
@@ -284,7 +285,9 @@ class OrdinaryCodeStaysClean(FlaggedCase):
 
 
 TEMPLATE = os.environ.get("TEMPLATE", "")
-TEMPLATE_COMMIT = "f863c419441a527e291503d50c53cbd126d13454"  # the catalog's template entry
+TEMPLATE_COMMIT = next(m["commit"] for m in json.loads(  # the catalog's template entry
+    (ROOT / "index-v2.json").read_text(encoding="utf-8"))["modules"]
+    if m["id"] == "acme-maintenance")
 
 
 class TemplateGoesToReview(unittest.TestCase):

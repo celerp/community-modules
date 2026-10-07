@@ -22,9 +22,9 @@ CHECK_RUNS = f"/repos/acme/widgets/commits/{SHA_A}/check-runs?per_page=100"
 
 
 def files_for(*entries: dict) -> dict[str, str]:
-    """index.json in catalog order. A listing pull request changes nothing else."""
+    """index-v2.json in catalog order. A listing pull request changes nothing else."""
     rank = {"official": 0, "verified": 1, "community": 2}
-    return {"index.json": index_text(*sorted(entries, key=lambda e: (rank[e["tier"]], e["id"])))}
+    return {"index-v2.json": index_text(*sorted(entries, key=lambda e: (rank[e["tier"]], e["id"])))}
 
 
 BASE = files_for(OFFICIAL, EXISTING)
@@ -41,7 +41,7 @@ class Case(unittest.TestCase):
     def setUp(self):
         self.gh = FakeGitHub(repo_routes(), {archive_url(): module_zip(module_files())})
         self.head = files_for(OFFICIAL, NEW, EXISTING)
-        self.changed = ["index.json"]
+        self.changed = ["index-v2.json"]
         self.author = "acme"
         self.association = "NONE"
         self.lint = no_lint
@@ -85,7 +85,7 @@ class Passes(Case):
 class Maintainer(Case):
     def test_maintainer_pull_request_is_left_for_review(self):
         self.association = "OWNER"
-        self.changed = ["index.json", "scripts/validate_index.py"]
+        self.changed = ["index-v2.json", "scripts/validate_index.py"]
         result = self.run_review()
         self.assertEqual(result.status, "maintainer")
 
@@ -98,23 +98,35 @@ class Maintainer(Case):
 
 class Scope(Case):
     def test_other_file_changed(self):
-        self.changed = ["index.json", "scripts/validate_index.py"]
+        self.changed = ["index-v2.json", "scripts/validate_index.py"]
         self.assertFails("scripts/validate_index.py")
 
     def test_index_not_changed(self):
         self.changed = ["README.md"]
-        self.assertFails("index.json")
+        self.assertFails("index-v2.json")
+
+    def test_listing_may_change_only_index_v2(self):
+        self.changed = ["index-v2.json", "index.json"]
+        result = self.assertFails("`index.json`")
+        self.assertTrue(any("may change only index-v2.json" in p for p in result.problems),
+                        result.problems)
+
+    def test_change_to_index_json_alone_is_not_a_listing(self):
+        self.changed = ["index.json"]
+        result = self.assertFails("`index.json`")
+        self.assertTrue(any("does not change index-v2.json" in p for p in result.problems),
+                        result.problems)
 
     def test_readme_change_is_out_of_scope(self):
-        # README.md is rebuilt from index.json after the merge, so a listing leaves it alone.
-        self.changed = ["index.json", "README.md"]
+        # README.md is rebuilt from index-v2.json after the merge, so a listing leaves it alone.
+        self.changed = ["index-v2.json", "README.md"]
         result = self.assertFails("README.md")
         self.assertTrue(any("after" in p and "merge" in p for p in result.problems),
                         result.problems)
         self.assertFalse(any("gen_readme" in p for p in result.problems), result.problems)
 
     def test_invalid_index(self):
-        self.head = {"index.json": index_text(
+        self.head = {"index-v2.json": index_text(
             OFFICIAL, {k: v for k, v in NEW.items() if k != "commit"}, EXISTING)}
         self.assertFails("commit")
 
@@ -142,8 +154,8 @@ class Scope(Case):
         self.gh.downloads[archive_url()] = module_zip(
             module_files("beta-tools", display="Beta Tools"))
         self.with_entry(OFFICIAL, dict(EXISTING, repo="https://github.com/acme/widgets",
-                                       commit=SHA_A))
-        self.assertFails("beta")
+                                       commit=SHA_A, author="Acme"))
+        self.assertFails("listed by `beta`")
 
     def test_update_without_new_commit(self):
         base = files_for(OFFICIAL, NEW, EXISTING)
@@ -179,6 +191,20 @@ class Ownership(Case):
         self.with_entry(OFFICIAL, dict(NEW, repo="https://github.com/acme/widgets/tree/dev"),
                         EXISTING)
         self.assertFails("https://github.com/<owner>/<repository>")
+
+    def test_author_must_be_the_repository_owner(self):
+        self.with_entry(OFFICIAL, dict(NEW, author="Microsoft"), EXISTING)
+        result = self.assertFails("Microsoft")
+        self.assertTrue(any("acme" in p for p in result.problems), result.problems)
+
+    def test_author_spoof_by_the_repository_owner_is_rejected(self):
+        # The submitter owns the repository, so only the author field is wrong.
+        self.with_entry(OFFICIAL, dict(NEW, author="Celerp Team"), EXISTING)
+        self.assertFails("author")
+
+    def test_author_matches_owner_in_any_case(self):
+        self.with_entry(OFFICIAL, dict(NEW, author="ACME"), EXISTING)
+        self.assertEqual(self.run_review().status, "pass")
 
     def test_repo_moved_or_renamed(self):
         self.gh.routes["/repos/acme/widgets"] = dict(
@@ -222,6 +248,33 @@ class Naming(Case):
         self.assertFails("Celerp")
 
 
+class NonAsciiNames(Case):
+    """Names outside ASCII are welcome, and a maintainer reviews them before listing."""
+
+    def test_non_ascii_entry_name_goes_to_review(self):
+        self.gh.downloads[archive_url()] = module_zip(module_files(display="Acme Widgets"))
+        self.with_entry(OFFICIAL, dict(NEW, name="Acme Wid\u0261ets"), EXISTING)
+        result = self.run_review()
+        self.assertEqual((result.status, result.problems), ("flag", []), result)
+        self.assertTrue(any("name" in f for f in result.flags), result.flags)
+
+    def test_non_ascii_manifest_display_name_goes_to_review(self):
+        self.gh.downloads[archive_url()] = module_zip(module_files(display="\u0410cme Widgets"))
+        result = self.run_review()
+        self.assertEqual((result.status, result.problems), ("flag", []), result)
+        self.assertTrue(any("display_name" in f for f in result.flags), result.flags)
+
+    def test_international_name_is_not_rejected(self):
+        self.gh.downloads[archive_url()] = module_zip(module_files(display="Gestion d'\u00e9quipement"))
+        self.with_entry(OFFICIAL, dict(NEW, name="Gestion d'\u00e9quipement"), EXISTING)
+        result = self.run_review()
+        self.assertEqual(result.status, "flag", result)
+
+    def test_non_ascii_name_with_a_problem_still_fails(self):
+        self.with_entry(OFFICIAL, dict(NEW, name="Acme Wid\u0261ets", author="Other"), EXISTING)
+        self.assertFails("author")
+
+
 class RepoChecks(Case):
     def test_private_repo(self):
         self.gh.routes.update(repo_routes(private=True))
@@ -247,11 +300,36 @@ class RepoChecks(Case):
         self.gh.routes.update(repo_routes(spdx="Apache-2.0"))
         self.assertFails("Apache-2.0")
 
-    def test_custom_license_is_accepted(self):
-        self.gh.routes.update(repo_routes(spdx="NOASSERTION"))
+    def test_recognized_matching_license_passes(self):
+        self.gh.routes.update(repo_routes(spdx="Apache-2.0"))
+        self.gh.downloads[archive_url()] = module_zip(module_files(license="Apache-2.0"))
+        self.with_entry(OFFICIAL, dict(NEW, license="Apache-2.0"), EXISTING)
+        result = self.run_review()
+        self.assertEqual((result.status, result.problems, result.flags), ("pass", [], []))
+
+    def custom_license(self, spdx):
+        self.gh.routes.update(repo_routes(spdx=spdx))
         self.gh.downloads[archive_url()] = module_zip(module_files(license="Free to use, no resale"))
         self.with_entry(OFFICIAL, dict(NEW, license="Free to use, no resale"), EXISTING)
-        self.assertEqual(self.run_review().status, "pass")
+        return self.run_review()
+
+    def test_custom_license_goes_to_review(self):
+        result = self.custom_license("NOASSERTION")
+        self.assertEqual((result.status, result.problems), ("flag", []), result)
+        self.assertTrue(any("license" in f for f in result.flags), result.flags)
+
+    def test_unrecognized_license_goes_to_review(self):
+        self.gh.routes.update(repo_routes())
+        self.gh.routes[f"/repos/acme/widgets/license?ref={SHA_A}"] = {"license": None}
+        result = self.run_review()
+        self.assertEqual((result.status, result.problems), ("flag", []), result)
+        self.assertTrue(any("license" in f for f in result.flags), result.flags)
+
+    def test_custom_license_that_differs_from_the_manifest_fails(self):
+        self.gh.routes.update(repo_routes(spdx="NOASSERTION"))
+        self.gh.downloads[archive_url()] = module_zip(module_files(license="Other terms"))
+        self.with_entry(OFFICIAL, dict(NEW, license="Free to use, no resale"), EXISTING)
+        self.assertFails("Other terms")
 
     def test_manifest_license_differs_from_entry(self):
         self.gh.downloads[archive_url()] = module_zip(module_files(license="GPL-3.0"))
@@ -394,7 +472,7 @@ class Comments(Case):
         self.author = "mallory"
         text = comment(self.run_review())
         self.assertIn("changes needed", text.lower())
-        self.assertIn("`commit` in this pull request's index.json", text)
+        self.assertIn("`commit` in this pull request's index-v2.json", text)
         self.assertNotIn("push", text.lower())
         self.assertNotIn("\u2014", text)
 
@@ -461,12 +539,12 @@ class PullRequestReadAsData(unittest.TestCase):
         git(up, "init", "-q")
         (up / ".github").mkdir()
         (up / ".github/CODEOWNERS").write_text("* @keeper\n")
-        (up / "index.json").write_text("base\n")
+        (up / "index-v2.json").write_text("base\n")
         git(up, "add", "-A")
         git(up, "commit", "-qm", "base")
         self.base = git(up, "rev-parse", "HEAD")
         git(up, "checkout", "-qb", "listing")
-        (up / "index.json").write_text("head\n")
+        (up / "index-v2.json").write_text("head\n")
         git(up, "commit", "-qam", "listing")
         self.head = git(up, "rev-parse", "HEAD")
         git(up, "checkout", "-q", "main")
@@ -504,13 +582,13 @@ class PullRequestReadAsData(unittest.TestCase):
     def test_reads_github_merge_without_touching_the_checkout(self):
         base_sha, changed, base, head, owners = check_submission.pull_request_data(7, self.head)
         self.assertEqual(base_sha, self.main)
-        self.assertEqual(changed, ["index.json"])
-        self.assertEqual(base["index.json"], "base\n")
-        self.assertEqual(head["index.json"], "head\n")
+        self.assertEqual(changed, ["index-v2.json"])
+        self.assertEqual(base["index-v2.json"], "base\n")
+        self.assertEqual(head["index-v2.json"], "head\n")
         self.assertEqual(owners, {"keeper"})
         self.assertEqual(git(self.work, "rev-parse", "HEAD"), self.main)
         self.assertEqual(git(self.work, "status", "--porcelain"), "")
-        self.assertEqual((self.work / "index.json").read_text(), "base\n")
+        self.assertEqual((self.work / "index-v2.json").read_text(), "base\n")
 
     def test_merge_of_another_head_is_refused(self):
         with self.assertRaises(check_submission._Stop):
@@ -523,18 +601,18 @@ class PullRequestReadAsData(unittest.TestCase):
 
     def test_a_name_with_a_space_is_one_file(self):
         def change(up):
-            (up / "index.json").write_text("head\n")
-            (up / "README.md index.json").write_text("anything\n")
+            (up / "index-v2.json").write_text("head\n")
+            (up / "README.md index-v2.json").write_text("anything\n")
         head = self.merge_onto_main(9, change)
         _, changed, *_ = check_submission.pull_request_data(9, head)
-        self.assertEqual(sorted(changed), ["README.md index.json", "index.json"])
+        self.assertEqual(sorted(changed), ["README.md index-v2.json", "index-v2.json"])
         self.assertTrue(check_submission._scope_problems(changed))
 
     def test_catalog_that_moved_after_the_checkout_asks_to_run_again(self):
         (self.up / "later.txt").write_text("x\n")
         git(self.up, "add", "-A")
         git(self.up, "commit", "-qm", "main moves after the checkout")
-        head = self.merge_onto_main(10, lambda up: (up / "index.json").write_text("head\n"))
+        head = self.merge_onto_main(10, lambda up: (up / "index-v2.json").write_text("head\n"))
         with self.assertRaises(check_submission._Stop) as stop:
             check_submission.pull_request_data(10, head)
         text = " ".join(stop.exception.args[0])

@@ -1,7 +1,7 @@
 name: Rebuild README
 
-# README.md's module table is generated from index.json by scripts/gen_readme.py.
-# Listing pull requests change index.json only, so after every push to main this
+# README.md's module table is generated from index-v2.json by scripts/gen_readme.py.
+# Listing pull requests change index-v2.json only, so after every push to main this
 # rebuilds the table and commits it when it changed. A push made with the
 # workflow's own token starts no other workflow, so this never runs itself again.
 on:

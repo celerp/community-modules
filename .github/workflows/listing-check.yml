@@ -3,7 +3,7 @@ name: Listing check
 # Checks a listing pull request against its module's repository. It runs on
 # pull_request_target, so the workflow and scripts are always the default
 # branch's: the checkout is the default branch, and check_submission.py reads
-# the pull request's index.json and changed files with git as data.
+# the pull request's index-v2.json and changed files with git as data.
 # Nothing from the pull request is checked out, installed or run, and the
 # module's archive is only read. Its result.json is what the "Merge listing"
 # workflow reads to decide whether to merge.

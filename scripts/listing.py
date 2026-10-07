@@ -1,7 +1,10 @@
 """What a listing pull request may touch, shared by the check and the merge gate."""
 
+# The catalog every listing lives in. index.json is the earlier format, kept empty
+# for older Celerp versions; validate_index.py holds it to that.
+CATALOG = "index-v2.json"
 # The only files a listing pull request may change.
-LISTING_FILES = ("index.json",)
+LISTING_FILES = (CATALOG,)
 # Pull requests from these author associations are reviewed by hand, never merged by a bot.
 MAINTAINER_ROLES = ("OWNER", "MEMBER", "COLLABORATOR")
 # Who maintains the directory: the users named in this file, plus the roles above.

@@ -1,5 +1,5 @@
 <!-- Adding or updating your module in the directory? Change one entry in
-     index.json and nothing else; the README table is rebuilt after the merge.
+     index-v2.json and nothing else; the README table is rebuilt after the merge.
      See "List your module" in the README for what the automatic check
      requires. -->
 
@@ -14,8 +14,9 @@ Checklist:
 - [ ] The repository is public and `commit` is on its default branch
 - [ ] An update points `commit` at a new commit
 - [ ] The license matches the repository's license file and the manifest
+- [ ] `author` is the GitHub account that owns the repository
 - [ ] The module README states what data it touches and any network calls
 - [ ] The name does **not** start with `celerp-`
 - [ ] `python lint.py <module-folder>` from the template passes
-- [ ] I changed one `index.json` entry with `"tier": "community"`, declaring `data_access` and `network_calls`
-- [ ] This pull request changes `index.json` only
+- [ ] I changed one `index-v2.json` entry with `"tier": "community"`, declaring `data_access` and `network_calls`
+- [ ] This pull request changes `index-v2.json` only

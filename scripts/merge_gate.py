@@ -15,7 +15,7 @@ retried.
 The check runs on pull_request_target from the default branch, so its result
 comes from this repository's own scripts; only a run of that workflow, for
 that trigger, is used. The result is used only when the pull request changes
-nothing but index.json. A pull request is squash-merged only when all of these hold:
+nothing but index-v2.json. A pull request is squash-merged only when all of these hold:
   - the check run for its exact head commit succeeded and reported "pass"
   - the head has not moved and the default branch has not moved since the check
   - it targets the default branch, is open, and was not opened by a maintainer
@@ -32,7 +32,7 @@ import sys
 import zipfile
 
 from github_api import ApiError, GitHub, NotFound, TooLarge
-from listing import CODEOWNERS, LISTING_FILES, code_owners, is_maintainer
+from listing import CATALOG, CODEOWNERS, LISTING_FILES, code_owners, is_maintainer
 
 FLAG_LABEL = "needs-review"
 MARKER = "<!-- listing-check -->"
@@ -50,9 +50,9 @@ DID_NOT_FINISH = ("## Listing check: did not finish\n\n"
                   "The automatic check did not finish, so this pull request was not merged. "
                   "Close and reopen this pull request to run the check again.\n")
 OTHER_FILES = ("## Listing check: changes needed\n\n"
-               "This pull request changes files other than index.json, so it "
+               f"This pull request changes files other than {CATALOG}, so it "
                "cannot be merged automatically. Take the other changes out of this pull "
-               "request; README.md is rebuilt from index.json after the merge.\n")
+               f"request; README.md is rebuilt from {CATALOG} after the merge.\n")
 BRANCH_MOVED = ("## Listing check: run again\n\n"
                 "The catalog changed after this check ran, so it was not merged. Close and "
                 "reopen this pull request to check it against the current catalog.\n")
@@ -139,7 +139,7 @@ def _handle_pr(gh, base: str, default: str, number: int, maintainers: set[str]) 
         names.add(f["filename"])
         if f.get("previous_filename"):
             names.add(f["previous_filename"])
-    if not names <= set(LISTING_FILES) or "index.json" not in names:
+    if not names <= set(LISTING_FILES) or CATALOG not in names:
         say(OTHER_FILES)
         return
     if (result is None or result.get("pr") != number or result.get("head_sha") != head

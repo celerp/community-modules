@@ -57,7 +57,7 @@ class Gate(unittest.TestCase):
             R: {"default_branch": "main"},
             f"{R}/pulls?state=open&per_page=100": [{"number": 12, "head": {"sha": HEAD}}],
             f"{R}/pulls/12": self.pr,
-            f"{R}/pulls/12/files?per_page=100": [{"filename": "index.json"}],
+            f"{R}/pulls/12/files?per_page=100": [{"filename": "index-v2.json"}],
             f"{R}/actions/runs/77/artifacts": {"artifacts": [
                 {"name": "submission-result", "archive_download_url": URL, "expired": False}]},
             f"{R}/branches/main": {"commit": {"sha": BASE}},
@@ -187,26 +187,39 @@ class Refuses(Gate):
 
     def test_other_files_changed(self):
         self.gh.routes[f"{R}/pulls/12/files?per_page=100"] = [
-            {"filename": "index.json"}, {"filename": ".github/workflows/ci.yml"}]
+            {"filename": "index-v2.json"}, {"filename": ".github/workflows/ci.yml"}]
         self.assertNoMerge()
-        self.assertTrue(any("index.json" in c for c in self.comments()))
+        self.assertTrue(any("index-v2.json" in c for c in self.comments()))
 
     def test_readme_changed(self):
         # README.md is rebuilt after the merge, so a listing that changes it is not merged.
         self.gh.routes[f"{R}/pulls/12/files?per_page=100"] = [
-            {"filename": "index.json"}, {"filename": "README.md"}]
+            {"filename": "index-v2.json"}, {"filename": "README.md"}]
         self.assertNoMerge()
-        self.assertTrue(any("other than index.json" in c and "rebuilt" in c
+        self.assertTrue(any("other than index-v2.json" in c and "rebuilt" in c
                             for c in self.comments()), self.comments())
 
     def test_renamed_file_counts_both_names(self):
         self.gh.routes[f"{R}/pulls/12/files?per_page=100"] = [
-            {"filename": "index.json", "previous_filename": "scripts/gen_readme.py"}]
+            {"filename": "index-v2.json", "previous_filename": "scripts/gen_readme.py"}]
         self.assertNoMerge()
 
     def test_index_not_changed(self):
         self.gh.routes[f"{R}/pulls/12/files?per_page=100"] = [{"filename": "LICENSE"}]
         self.assertNoMerge()
+
+    def test_change_to_index_json_is_not_merged(self):
+        self.gh.routes[f"{R}/pulls/12/files?per_page=100"] = [
+            {"filename": "index-v2.json"}, {"filename": "index.json"}]
+        self.assertNoMerge()
+        self.assertTrue(any("other than index-v2.json" in c for c in self.comments()),
+                        self.comments())
+
+    def test_change_to_index_json_alone_is_not_merged(self):
+        self.gh.routes[f"{R}/pulls/12/files?per_page=100"] = [{"filename": "index.json"}]
+        self.assertNoMerge()
+        self.assertTrue(any("other than index-v2.json" in c for c in self.comments()),
+                        self.comments())
 
     def test_maintainer_pull_request(self):
         self.pr["author_association"] = "OWNER"
@@ -287,7 +300,7 @@ class EveryCheckIsHandled(Gate):
         self.gh.routes[f"{R}/pulls?state=open&per_page=100"].append(
             {"number": number, "head": {"sha": head}})
         self.gh.routes[f"{R}/pulls/{number}"] = pr
-        self.gh.routes[f"{R}/pulls/{number}/files?per_page=100"] = [{"filename": "index.json"}]
+        self.gh.routes[f"{R}/pulls/{number}/files?per_page=100"] = [{"filename": "index-v2.json"}]
         self.gh.routes[f"{R}/issues/{number}/comments?per_page=100"] = []
         self.gh.routes[runs_path(head)] = {"workflow_runs": [
             check_run(id=run_id, head_sha=head, **run_over)]}

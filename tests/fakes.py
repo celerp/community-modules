@@ -115,7 +115,7 @@ def entry(mid: str = "acme-widgets", **over) -> dict:
 
 
 def index_text(*entries: dict) -> str:
-    return json.dumps({"schema_version": 1, "modules": list(entries)}, indent=2) + "\n"
+    return json.dumps({"schema_version": 2, "modules": list(entries)}, indent=2) + "\n"
 
 
 def repo_routes(owner: str = "acme", name: str = "widgets", sha: str = SHA_A, *,

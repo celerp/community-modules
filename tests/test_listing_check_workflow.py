@@ -120,7 +120,7 @@ class PinnedDependencies(unittest.TestCase):
 
 
 class ReadmeRebuild(unittest.TestCase):
-    """README.md's table is rebuilt on the default branch, so a listing changes index.json only."""
+    """README.md's table is rebuilt on the default branch, so a listing changes index-v2.json only."""
 
     def setUp(self):
         self.text = (WORKFLOWS / "readme.yml").read_text(encoding="utf-8")

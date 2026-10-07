@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
-"""Validate index.json: JSON Schema plus the policy rules a schema cannot say.
+"""Validate the catalog: index-v2.json against its JSON Schema plus the policy rules
+a schema cannot say, and index.json as the empty earlier format.
 
 Runs in CI on every pull request. It only reads text - it never runs a module.
 
-Policy rules on top of the schema:
+index.json is the catalog format older Celerp versions read. It stays exactly
+{"schema_version": 1, "modules": []}; every listing is in index-v2.json.
+
+Policy rules on top of the index-v2.json schema:
   - ids are unique and the list is sorted by (tier rank, id)
   - the "celerp-" id prefix is reserved for the official tier
   - community and verified tiers require a public repo and its commit
   - repo is exactly https://github.com/<owner>/<repository> (the schema's pattern)
   - community and verified tiers require data_access and network_calls
+  - a community entry's author is its repository's owner (any letter case)
   - community tier carries no version (the module's own manifest is the version)
   - verified tier requires sha256
   - a price requires the verified or official tier (we do not sell unverified code)
@@ -25,8 +30,12 @@ import sys
 
 import jsonschema
 
+from listing import CATALOG
+
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-SCHEMA = json.loads((ROOT / "schema" / "index.schema.json").read_text(encoding="utf-8"))
+SCHEMA = json.loads((ROOT / "schema" / "index-v2.schema.json").read_text(encoding="utf-8"))
+V1_FILE = "index.json"
+V1_INDEX = {"schema_version": 1, "modules": []}
 TIER_RANK = {"official": 0, "verified": 1, "community": 2}
 # The repository address, with the owner and repository name as its two groups.
 REPO_URL = re.compile(SCHEMA["$defs"]["module"]["properties"]["repo"]["pattern"])
@@ -72,6 +81,12 @@ def check(index: dict) -> list[str]:
             for field in ("repo", "commit", "data_access", "network_calls"):
                 if not m.get(field):
                     problems.append(f"{mid}: {tier} tier requires {field}")
+        if tier == "community":
+            owner = REPO_URL.fullmatch(m["repo"]).group(1) if m.get("repo") else None
+            if owner and m["author"].lower() != owner.lower():
+                problems.append(f"{mid}: author is {m['author']!r} but the repository belongs "
+                                f"to {owner!r}. A community entry's author is the GitHub "
+                                "account that owns its repository.")
         if tier == "community" and "version" in m:
             problems.append(f"{mid}: leave out version; a community module's version is the one in its own manifest")
         if tier == "verified" and not m.get("sha256"):
@@ -85,9 +100,16 @@ def check(index: dict) -> list[str]:
     return problems
 
 
+def check_v1(index) -> list[str]:
+    """index.json: the earlier catalog format, which lists no modules."""
+    if index != V1_INDEX:
+        return [f"must be exactly {json.dumps(V1_INDEX)}; every listing goes in {CATALOG}"]
+    return []
+
+
 def selftest() -> int:
     base = {
-        "schema_version": 1,
+        "schema_version": 2,
         "modules": [
             {"id": "my-module", "name": "My Module", "description": "Does things.",
              "tier": "community", "repo": "https://github.com/a/b", "commit": "a" * 40,
@@ -101,6 +123,7 @@ def selftest() -> int:
                 "https://github.com/a/b..c", "https://github.com/a/git"):
         doc = copy.deepcopy(base)
         doc["modules"][0]["repo"] = url
+        doc["modules"][0]["author"] = url.split("/")[3]
         assert check(doc) == [], f"{url} must pass"
 
     def broken(mutate) -> dict:
@@ -109,6 +132,8 @@ def selftest() -> int:
         return doc
 
     cases = {
+        "schema version 1": {**base, "schema_version": 1},
+        "author is not the repo owner": broken(lambda ms: ms[0].update(author="Someone")),
         "bad tier": broken(lambda ms: ms[0].update(tier="platinum")),
         "duplicate id": broken(lambda ms: ms.append(dict(ms[0]))),
         "reserved prefix": broken(lambda ms: ms[0].update(id="celerp-sneaky")),
@@ -157,6 +182,9 @@ def selftest() -> int:
             "data_access": "Its own records.", "network_calls": "None."})),
     }
     failures = [label for label, doc in cases.items() if not check(doc)]
+    assert check_v1(V1_INDEX) == [], "the empty earlier index must pass"
+    if not check_v1({"schema_version": 1, "modules": base["modules"]}):
+        failures.append(f"{V1_FILE} with a module")
     if failures:
         print("selftest FAILED, these fixtures passed validation:", ", ".join(failures))
         return 1
@@ -167,13 +195,16 @@ def selftest() -> int:
 def main() -> int:
     if "--selftest" in sys.argv:
         return selftest()
-    index = json.loads((ROOT / "index.json").read_text(encoding="utf-8"))
-    problems = check(index)
-    for p in problems:
-        print(f"index.json: {p}")
-    if not problems:
-        print(f"index.json ok ({len(index['modules'])} modules)")
-    return 1 if problems else 0
+    failed = False
+    for name, rule in ((CATALOG, check), (V1_FILE, check_v1)):
+        index = json.loads((ROOT / name).read_text(encoding="utf-8"))
+        problems = rule(index)
+        for p in problems:
+            print(f"{name}: {p}")
+        if not problems:
+            print(f"{name} ok ({len(index['modules'])} modules)")
+        failed = failed or bool(problems)
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":

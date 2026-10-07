@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://raw.githubusercontent.com/celerp/community-modules/main/schema/index.schema.json",
-  "title": "Celerp module catalog",
+  "$id": "https://raw.githubusercontent.com/celerp/community-modules/main/schema/index-v2.schema.json",
+  "title": "Celerp module catalog, schema version 2",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "modules"],
   "properties": {
-    "schema_version": { "const": 1 },
+    "schema_version": { "const": 2 },
     "modules": {
       "type": "array",
       "items": { "$ref": "#/$defs/module" }
