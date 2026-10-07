@@ -1,7 +1,9 @@
 name: Validate catalog
 
-# Validates index.json (schema + policy rules) and checks the README table is
-# generated from it. Read-only; it never runs a listed module's code.
+# Runs this repository's tests and validates the catalog: index-v2.json (schema +
+# policy rules) and index.json (the earlier format, kept empty).
+# Read-only. Listing pull requests are checked by the "Listing check" workflow,
+# and the README table is rebuilt after each push to main by "Rebuild README".
 on:
   pull_request:
   push:
@@ -14,8 +16,17 @@ jobs:
   validate:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - run: pip install --quiet "jsonschema>=4"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - run: pip install --quiet --require-hashes -r scripts/requirements.txt
       - run: python3 scripts/validate_index.py --selftest
+      # The template, for the tests of the template lint the listing check runs.
+      - run: git clone --quiet --filter=blob:none https://github.com/celerp/celerp-module-template "$RUNNER_TEMP/template"
+      - run: python3 -m unittest discover -s tests -t tests
+        env:
+          TEMPLATE: ${{ runner.temp }}/template
       - run: python3 scripts/validate_index.py
-      - run: python3 scripts/gen_readme.py --check

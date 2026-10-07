@@ -7,7 +7,10 @@ Every feature in Celerp is a module; these are ones the community has shared.
 
 **This is an index, not a code host.** Each module lives in its author's own
 repository. Celerp does **not** review, host, sign, or warrant the modules
-listed here. **A listing is not an endorsement.**
+listed here. **A listing is not an endorsement.** The automatic checks described
+under "List your module" make sure a listing matches its repository and look
+for code that does more than the listing declares. They are not a code review
+and cannot prove a module does only what it declares.
 
 Modules are third-party software that runs with the same access as Celerp
 itself. Treat one like anything else you install: read the code, or decide you
@@ -20,7 +23,9 @@ property, and a deliberate one.
 
 ## Install a module
 
-1. Open the module's own repository (linked in the list below) and download it.
+1. Open the module's source link in the list below. It points at the exact
+   commit that is listed; download that commit as a zip (**Code**, then
+   **Download ZIP**).
 2. In Celerp, open the **Modules** section. On the **Local Modules** tab, use
    **Import Module** to add the zip you downloaded, or point it at an unzipped
    module folder. You can also copy the module folder into your Celerp data
@@ -37,26 +42,47 @@ with the manifest.
 
 ## The modules
 
-The machine-readable catalog is [`index.json`](index.json); Celerp's in-app
-Marketplace tab and the table below are both generated from it. **Official**
+The machine-readable catalog is [`index-v2.json`](index-v2.json); Celerp's in-app
+Marketplace tab and the table below are both generated from it.
+[`index.json`](index.json) is the earlier catalog format, kept for older Celerp
+versions; it lists no modules and listing pull requests leave it alone. **Official**
 modules are built and sold by Celerp. **Community** modules are third-party,
 exactly as described above.
 
-<!-- The table below is generated from index.json by scripts/gen_readme.py. Edit index.json, not the table. -->
+<!-- The table below is generated from index-v2.json by scripts/gen_readme.py after every merge. Edit index-v2.json, not the table. -->
 <!-- modules:begin -->
 | Module | Tier | What it does | Source | Author | License |
 |---|---|---|---|---|---|
-| Equipment Maintenance | Community | Track company equipment and what's due for service. | [celerp/celerp-module-template](https://github.com/celerp/celerp-module-template) | Celerp | MIT |
+| Equipment Maintenance | Community | Track company equipment and what\'s due for service\. | [celerp/celerp-module-template @ b69e0fa](https://github.com/celerp/celerp-module-template/tree/b69e0fa8289731fda74d134f61e7260607a717cd) | Celerp | MIT |
 <!-- modules:end -->
 
 ## List your module
 
 Build against the [module template](https://github.com/celerp/celerp-module-template),
-publish it in **your own** public repository, then open a PR here that adds one
-entry to [`index.json`](index.json). The README table above is generated from
-that file, so there is nothing to edit by hand.
+publish it in **your own** public repository, then open a pull request here that
+adds one entry to [`index-v2.json`](index-v2.json). The pull request changes nothing
+else: the table above is rebuilt from `index-v2.json` after every merge.
 
-Your `index.json` entry looks like this. Keep official entries first, in their
+You can do all of it in a browser:
+
+1. Open [`index-v2.json`](index-v2.json) and click the pencil (**Edit this file**).
+   GitHub forks this repository into your account for you.
+2. Add your entry (below) in its place, then click **Commit changes...**,
+   **Propose changes**, and **Create pull request**.
+
+With ChatGPT or Claude, fork this repository yourself first (**Fork**, then
+**Create fork**), because a chat's GitHub connector cannot fork. The chat then
+commits your entry to a new branch of your fork and opens the pull request. If
+it cannot open a pull request across forks, open
+`https://github.com/celerp/community-modules/compare/main...<you>:community-modules:<branch>?expand=1`
+with your username and the chat's branch filled in, and click
+**Create pull request**.
+
+From a terminal, the same thing is a fork, one commit that changes
+`index-v2.json`, and a pull request against `main`;
+`python3 scripts/validate_index.py` checks the file before you push.
+
+Your `index-v2.json` entry looks like this. Keep official entries first, in their
 existing order, then community entries by `id`, so the file and the generated
 table sort the same way:
 
@@ -66,41 +92,87 @@ table sort the same way:
   "name": "Acme Widgets",
   "description": "One sentence on what it does.",
   "tier": "community",
-  "version": "0.1.0",
   "repo": "https://github.com/acme/acme-widgets",
-  "author": "Acme",
+  "commit": "0123456789abcdef0123456789abcdef01234567",
+  "author": "acme",
   "license": "MIT",
   "data_access": "Which tables it reads and writes, and nothing else.",
   "network_calls": "Every outbound call it makes, or 'None.'"
 }
 ```
 
-Before it's merged, a listing must:
+`commit` is the full 40-character id of the commit you are listing, on your
+repository's default branch. The listing check runs on that commit and the
+Source link in the table points to it, so the listed code is the checked code.
+`author` is the GitHub account that owns the repository, here `acme`.
+**Every update is a new pull request with a new `commit`**, opened from the
+same GitHub account.
 
-- link to a repository whose **source is readable**, so users can review what
-  they install (this is the whole trust model);
-- state a **clear license**. Open-source (MIT, Apache) is welcome; a
-  source-available "free to use, no resale" license is equally fine - keep your
-  commercial rights if you plan to sell a version later. Just make it clear what
-  users may do;
+### What the automatic check requires
+
+Every pull request here runs the listing check against the commit you list. The
+check always runs this directory's own scripts from its default branch: it reads
+your pull request's `index-v2.json` and your module's files as text and never runs
+anything from either. A listing pull request must:
+
+- change only `index-v2.json`, adding or updating **exactly one** community entry
+  and leaving every other entry as it is;
+- be opened by the GitHub account that owns the repository, and name that
+  account as `author`; an update must come from the account that owns the entry
+  it updates;
+- link a **public** GitHub repository, `https://github.com/<owner>/<repository>`,
+  whose `commit` is on its default branch;
+- state a **clear license** that matches the repository's license file and the
+  `license` in your module's `PLUGIN_MANIFEST`. Open-source (MIT, Apache) is
+  welcome. A license GitHub does not recognize, for example a source-available
+  "free to use, no resale" license, is reviewed by a maintainer before listing;
+- fit Celerp's install limits: an archive of at most 50 MB that unpacks to at
+  most 200 MB, with only regular files (no symbolic links);
+- hold one module, in a folder named after the `id` (or at the repository
+  root), whose manifest `name` equals the `id` and which passes the template's
+  `python lint.py <module-folder>`;
+- use a name of its own: not the reserved `celerp-` prefix, not Celerp or a
+  lookalike of it, not the name or id of an official module, and not a name
+  another listing already uses;
 - declare **what data the module touches** (`data_access`) and **any network
   calls** (`network_calls`), and state the same in the module's README. Celerp
   shows both on your listing labelled as your own declaration;
-- **not** use the `celerp-` name prefix - that namespace is reserved for
-  official modules, so users can tell first-party from community at a glance;
-- carry a **version** that matches the `version` in the module's
-  `PLUGIN_MANIFEST`, so the listed version and the installed one stay in step;
-- use `"tier": "community"`. The `verified` and `official` tiers are set by the
-  maintainer of this directory, not chosen by a contributor;
-- pass `python lint.py <module-folder>` from the template (manifest is valid,
-  no imports of Celerp's revenue-gated internals) and
-  `python3 scripts/validate_index.py` from this repo (the entry is well-formed
-  and correctly ordered).
+- leave out `version` (the version is the one in your module's
+  `PLUGIN_MANIFEST`) and use `"tier": "community"`. The `verified` and
+  `official` tiers are set by the maintainer of this directory.
 
-Review is of the **listing**, not the code - see the trust section above.
+Some modules, for example one that makes its own network calls or has a name
+with characters outside ASCII, are reviewed by a person at Celerp before they
+are listed.
+
+### What happens next
+
+The check posts one comment on your pull request and keeps it up to date:
+
+- **passed**: the pull request is merged automatically, and the module appears
+  in Celerp's catalog on its next refresh;
+- **changes needed**: the comment lists each thing to fix, in plain language.
+  Fix the module in your repository, then set `commit` in this pull request's
+  `index-v2.json` to the new commit (in the browser: **Files changed**, the file's
+  **...** menu, **Edit file**). The check runs again on every change to the pull
+  request;
+- **waiting for the maintainer**: the listing was flagged and a maintainer
+  reviews it before it is listed.
+
+If your repository's own checks failed or had not finished at the commit you
+list, the comment says so. It does not block the listing, but people who install
+the module get that commit, so fix it first. To run the check again without a
+change, close and reopen the pull request.
+
+You can run the same checks on your entry locally with
+`python3 scripts/validate_index.py` and the template's `lint.py`.
+
+### Taking a listing down
+
 Listings are removed if a module turns out to be malicious, abandoned, or
-misrepresented; removal is a PR that takes the entry back out, and it reaches
-installed apps within minutes.
+misrepresented. To remove a listing, the maintainer reverts the pull request
+that added it (or takes the entry out); every Celerp hides it on its next
+catalog refresh. To take down your own listing, open an issue.
 
 ## Sell your module
 
@@ -115,7 +187,7 @@ you sell it through Celerp's marketplace rather than through this directory:
    Celerp will distribute them, so there is a short review between publishing
    and the first sale.
 4. The maintainer moves your entry to the `verified` tier and records the price
-   in `index.json`. That tier is what carries a Buy button. Community entries
+   in `index-v2.json`. That tier is what carries a Buy button. Community entries
    take no price - the directory's own check rejects one - so they always list
    as free, installed straight from the author's repository.
 
@@ -130,8 +202,8 @@ or the maintainer take it out.
 ## How listings work
 
 - **community** (this repo): built by the community, hosted by their authors,
-  installed by hand from the author's repository. Free to list. Celerp does not
-  review the code.
+  installed by hand from the author's repository at the listed commit. Free to
+  list. Listings are checked automatically; Celerp does not review the code.
 - **verified**: a third-party module sold through Celerp's marketplace. Scanned
   before distribution, bought and installed in-app. The tier is set by Celerp,
   never self-assigned.

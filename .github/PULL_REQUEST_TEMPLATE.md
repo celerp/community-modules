@@ -1,17 +1,22 @@
-<!-- Adding your module to the directory? Fill this in and add one entry to
-     index.json. The README table is generated from it, so you do not edit the
-     table by hand. See "List your module" in the README for the full bar. -->
+<!-- Adding or updating your module in the directory? Change one entry in
+     index-v2.json and nothing else; the README table is rebuilt after the merge.
+     See "List your module" in the README for what the automatic check
+     requires. -->
 
 **Module name:**
 **Repository (public URL):**
+**Commit (full 40 characters):**
 **License:**
 **What data it touches / network calls it makes:**
 
 Checklist:
-- [ ] The repository is public and the link works
-- [ ] The license is clearly stated (open-source or source-available are both fine)
+- [ ] I am opening this from the GitHub account that owns the repository
+- [ ] The repository is public and `commit` is on its default branch
+- [ ] An update points `commit` at a new commit
+- [ ] The license matches the repository's license file and the manifest
+- [ ] `author` is the GitHub account that owns the repository
 - [ ] The module README states what data it touches and any network calls
 - [ ] The name does **not** start with `celerp-`
 - [ ] `python lint.py <module-folder>` from the template passes
-- [ ] I added one `index.json` entry with `"tier": "community"`, declaring `data_access` and `network_calls`
-- [ ] `python3 scripts/validate_index.py` passes locally
+- [ ] I changed one `index-v2.json` entry with `"tier": "community"`, declaring `data_access` and `network_calls`
+- [ ] This pull request changes `index-v2.json` only

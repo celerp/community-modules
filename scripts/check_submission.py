@@ -1,0 +1,510 @@
+#!/usr/bin/env python3
+"""Check a listing pull request before it can be merged automatically.
+
+A listing pull request adds or updates exactly one community entry in
+index-v2.json and changes nothing else; README.md is rebuilt from index-v2.json
+after the merge (.github/workflows/readme.yml). This script checks the entry, the
+creator's repository at the entry's pinned commit, and the module's code in
+that commit's archive. The module's code is read as data: its manifest is
+parsed, never imported, and nothing in the archive is run. The module
+repository's own checks at that commit are read too, and any that failed or have
+not finished are noted in the comment without changing the outcome.
+
+The outcome is one of:
+  pass        every check passed; the merge workflow may merge it
+  fail        something must change; the comment says what
+  flag        checks passed, but a maintainer reviews it first: the code does
+              something a maintainer always reviews, the repository's license is
+              not one GitHub recognizes, or a name uses characters outside ASCII
+  maintainer  opened by a maintainer; reviewed by hand, never merged by a bot
+
+In CI, `check_submission.py <result.json>` runs from a checkout of the default
+branch on pull_request_target. It reads the pull request from the GitHub event
+and its files with `git show` (see pull_request_data), writes the outcome and its
+comment to <result.json>, and exits 1 on fail. Every error ends as fail, never
+as pass.
+"""
+from __future__ import annotations
+
+import ast
+import hashlib
+import importlib.util
+import io
+import json
+import os
+import pathlib
+import re
+import stat
+import subprocess
+import sys
+import tempfile
+import zipfile
+from dataclasses import dataclass, field
+
+from github_api import ApiError, GitHub, NotFound, TooLarge
+from listing import CATALOG, CODEOWNERS, LISTING_FILES, code_owners, is_maintainer
+from scan_module import KINDS, manifest_node, read_manifest, scan_folder
+from validate_index import REPO_URL, check as validate
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+MB = 1024 * 1024
+# The same caps Celerp applies when it installs a module (celerp/modules/importer.py).
+MAX_ARCHIVE_BYTES = 50 * MB
+MAX_UNPACKED_BYTES = 200 * MB
+ARCHIVE_CAP_TEXT = "50 MB"
+UNPACKED_CAP_TEXT = "200 MB"
+# A file name only Celerp itself may write into an installed module.
+RESERVED_FILES = (".celerp-premium",)
+# The module template's lint rules, at a fixed commit, with the file's sha256.
+TEMPLATE_REPO = "celerp/celerp-module-template"
+TEMPLATE_COMMIT = "b69e0fa8289731fda74d134f61e7260607a717cd"
+TEMPLATE_LINT_SHA256 = "4f5ee4d9167f05327edf32035da225d21e5466a105d08b0e883d85cd21905e3d"
+RUN_AGAIN = "Close and reopen this pull request to run the check again."
+NO_NETWORK = re.compile(r"^\s*(none|no network|n/?a)\b", re.I)
+LOOKALIKE = str.maketrans("013457", "oleast")
+
+
+@dataclass
+class Result:
+    status: str
+    problems: list[str] = field(default_factory=list)
+    flags: list[str] = field(default_factory=list)
+    entry_id: str | None = None
+    notes: list[str] = field(default_factory=list)
+
+
+class _Stop(Exception):
+    """A problem that makes the remaining checks meaningless."""
+
+
+def _q(value: object) -> str:
+    """Untrusted text shown inline in a comment."""
+    text = " ".join(str(value).split()).replace("`", "'")
+    return f"`{text[:200]}`"
+
+
+def _norm(text: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(text).lower().translate(LOOKALIKE))
+
+
+def _owner_of(repo: str) -> str | None:
+    m = REPO_URL.fullmatch(repo or "")
+    return m.group(1) if m else None
+
+
+# ── the listing itself ───────────────────────────────────────────────────────
+
+def _scope_problems(changed: list[str]) -> list[str]:
+    problems = []
+    others = sorted(set(changed) - set(LISTING_FILES))
+    if others:
+        problems.append(
+            f"This pull request changes {', '.join(_q(p) for p in others)}. A listing pull "
+            f"request may change only {CATALOG}; README.md is rebuilt from it after the "
+            "merge. Take the other changes out of this pull request.")
+    if CATALOG not in changed:
+        problems.append(f"This pull request does not change {CATALOG}. Add or update your "
+                        f"module's entry in {CATALOG}.")
+    return problems
+
+
+def _changed_entry(base: dict, head: dict) -> tuple[dict, dict | None, list[str]]:
+    before = {m["id"]: m for m in base["modules"]}
+    after = {m["id"]: m for m in head["modules"]}
+    problems = [f"The entry {_q(mid)} was removed. A listing pull request may not remove "
+                "entries; to take a listing down, open an issue and a maintainer will do it."
+                for mid in sorted(set(before) - set(after))]
+    touched = [mid for mid, m in after.items() if before.get(mid) != m]
+    if len(touched) != 1:
+        problems.append(
+            f"A listing pull request must add or update exactly one entry in {CATALOG}; "
+            f"this one changes {len(touched)}"
+            + (f" ({', '.join(_q(t) for t in touched)})" if touched else "")
+            + ". Open one pull request per module.")
+        raise _Stop(problems)
+    mid = touched[0]
+    entry, old = after[mid], before.get(mid)
+    if entry["tier"] != "community" or (old and old["tier"] != "community"):
+        problems.append(f"{_q(mid)} is not a community listing. Pull requests may add or "
+                        "update community listings only: set tier to \"community\".")
+        raise _Stop(problems)
+    return entry, old, problems
+
+
+def _ownership_problems(entry: dict, old: dict | None, author: str) -> list[str]:
+    owner = _owner_of(entry["repo"])  # the schema has checked its form
+    problems = []
+    if owner.lower() != author.lower():
+        problems.append(
+            f"This pull request was opened by {_q(author)}, but the repository belongs to "
+            f"{_q(owner)}. Open the pull request from the GitHub account that owns the "
+            "repository.")
+    if old is not None:
+        old_owner = _owner_of(old.get("repo", "")) or ""
+        if old_owner.lower() != author.lower():
+            problems.append(f"{_q(old['id'])} is listed by {_q(old_owner)}. Only that account "
+                            "can update it; choose a new id for your own module.")
+        elif old.get("commit") == entry.get("commit"):
+            problems.append(
+                f"{_q(entry['id'])} is already listed at commit {_q(entry['commit'])}. Every "
+                "update must point commit at a new commit of your repository.")
+    return problems
+
+
+def _celerp_name_problems(labels: dict[str, str]) -> list[str]:
+    return [f"The {label} {_q(value)} contains Celerp or a lookalike. Only Celerp's own "
+            "modules may use that name; choose your own."
+            for label, value in labels.items() if "celerp" in _norm(value)]
+
+
+def _non_ascii_flags(labels: dict[str, str]) -> list[str]:
+    return [f"The {label} {_q(value)} has characters outside ASCII; a maintainer reviews "
+            "every such name before it is listed."
+            for label, value in labels.items() if not str(value).isascii()]
+
+
+def _taken_name_problems(entry: dict, index: dict) -> list[str]:
+    problems = []
+    mid, name = entry["id"], entry["name"]
+    for other in index["modules"]:
+        if other["id"] == mid:
+            continue
+        if other["tier"] == "official":
+            short = other["id"].removeprefix("celerp-")
+            if {_norm(mid), _norm(name)} & {_norm(short), _norm(other["name"])}:
+                problems.append(
+                    f"The id {_q(mid)} or name {_q(name)} matches the official module "
+                    f"{_q(other['name'])} ({_q(other['id'])}). Choose a name of your own.")
+        elif _norm(name) == _norm(other["name"]) or _norm(mid) == _norm(other["id"]):
+            problems.append(f"The name {_q(name)} is too close to the listed module "
+                            f"{_q(other['name'])} ({_q(other['id'])}). Choose another.")
+    return problems
+
+
+# ── the creator's repository ─────────────────────────────────────────────────
+
+def _repo_problems(entry: dict, gh) -> tuple[str, str, list[str], list[str]]:
+    """The repository's owner and name, its problems, and its flags."""
+    owner, name = REPO_URL.fullmatch(entry["repo"]).groups()
+    sha = entry["commit"]
+    try:
+        info = gh.get(f"/repos/{owner}/{name}")
+    except NotFound:
+        raise _Stop([f"No public GitHub repository was found at {_q(entry['repo'])}. The "
+                     "repository must exist and be public."]) from None
+    if info.get("private") or info.get("visibility", "public") != "public":
+        raise _Stop([f"{_q(entry['repo'])} is private. The repository must be public."])
+    if str(info.get("full_name", "")).lower() != f"{owner}/{name}".lower():
+        raise _Stop([f"repo {_q(entry['repo'])} now points to {_q(info.get('full_name'))}. "
+                     "Set repo to the repository's current address."])
+    problems, flags = [], []
+    default = info.get("default_branch") or "main"
+    try:
+        compare = gh.get(f"/repos/{owner}/{name}/compare/{default}...{sha}")
+        on_default = compare.get("status") in ("identical", "behind")
+    except NotFound:
+        on_default = False
+    if not on_default:
+        problems.append(f"commit {_q(sha)} is not on the repository's default branch "
+                        f"{_q(default)}. Push the commit to {_q(default)} and use its full "
+                        "40-character id.")
+    try:
+        spdx = (gh.get(f"/repos/{owner}/{name}/license?ref={sha}").get("license") or {}) \
+            .get("spdx_id")
+    except NotFound:
+        problems.append("The repository has no license file at this commit. Add a LICENSE "
+                        "file that matches the license in your entry.")
+    else:
+        if not spdx or spdx == "NOASSERTION":
+            flags.append(f"The repository's license file is not a license GitHub recognizes, "
+                         f"so a maintainer reviews it against {_q(entry['license'])}.")
+        elif spdx.lower() != entry["license"].lower():
+            problems.append(f"The repository's license is {_q(spdx)} but the entry says "
+                            f"{_q(entry['license'])}. Make them the same.")
+    return owner, name, problems, flags
+
+
+def _is_manifest(data: bytes) -> bool:
+    # Decoded the way Celerp's importer decodes it, so both pick the same module folder.
+    try:
+        tree = ast.parse(data.decode("utf-8", errors="replace"))
+    except (SyntaxError, ValueError):
+        return False
+    return manifest_node(tree) is not None
+
+
+def _module_files(data: bytes, mid: str) -> dict[str, bytes]:
+    """The module folder's files, located the way Celerp locates them on install."""
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(data))
+    except zipfile.BadZipFile:
+        raise _Stop(["The repository archive at this commit could not be read."]) from None
+    with zf:
+        files: dict[str, bytes] = {}
+        unpacked = 0
+        problems = []
+        for info in zf.infolist():
+            parts = info.filename.split("/", 1)
+            rel = parts[1] if len(parts) == 2 else ""
+            if not rel or rel.endswith("/"):
+                continue
+            path = pathlib.PurePosixPath(rel)
+            if path.is_absolute() or ".." in path.parts or "\\" in rel:
+                problems.append(f"{_q(rel)} has a path Celerp will not unpack. Rename it.")
+                continue
+            if stat.S_ISLNK((info.external_attr >> 16) & 0xFFFF):
+                problems.append(f"{_q(rel)} is a symbolic link. A module may contain only "
+                                "regular files.")
+                continue
+            if path.name in RESERVED_FILES:
+                problems.append(f"{_q(rel)} is a file name Celerp reserves. Remove it.")
+                continue
+            unpacked += info.file_size
+            if unpacked > MAX_UNPACKED_BYTES:
+                raise _Stop([f"The repository unpacks to more than {UNPACKED_CAP_TEXT}, the "
+                             "most Celerp installs. Remove large files from the repository."])
+            files[rel] = zf.read(info)
+        if problems:
+            raise _Stop(problems)
+    if _is_manifest(files.get("__init__.py", b"")):
+        return files
+    roots = sorted(str(pathlib.PurePosixPath(p).parent) for p, b in files.items()
+                   if pathlib.PurePosixPath(p).name == "__init__.py" and _is_manifest(b))
+    if roots != [mid]:
+        raise _Stop([f"The repository must hold exactly one module, in a folder named "
+                     f"{_q(mid)} at its top level with an __init__.py that has "
+                     f"PLUGIN_MANIFEST; found {', '.join(_q(r) for r in roots) or 'none'}."])
+    return {p[len(mid) + 1:]: b for p, b in files.items() if p.startswith(mid + "/")}
+
+
+def _module_problems(entry: dict, files: dict[str, bytes], lint) -> tuple[dict, list[str]]:
+    manifest = read_manifest(files["__init__.py"])
+    if manifest is None:
+        raise _Stop(["PLUGIN_MANIFEST in __init__.py must be a dict of plain values."])
+    problems = []
+    if manifest.get("name") != entry["id"]:
+        problems.append(f"The manifest name is {_q(manifest.get('name'))} but the entry id is "
+                        f"{_q(entry['id'])}. They must be the same.")
+    if manifest.get("license") != entry["license"]:
+        problems.append(f"The manifest license is {_q(manifest.get('license'))} but the entry "
+                        f"says {_q(entry['license'])}. They must be the same.")
+    with tempfile.TemporaryDirectory() as tmp:
+        folder = pathlib.Path(tmp) / entry["id"]
+        for rel, data in files.items():
+            dest = folder / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(data)
+        problems += [f"Template lint: {' '.join(p.replace(str(folder), entry['id']).split())}"
+                     for p in lint(folder)]
+    return manifest, problems
+
+
+def _flags(entry: dict, files: dict[str, bytes]) -> list[str]:
+    says_none = NO_NETWORK.match(entry["network_calls"])
+    flags = []
+    for f in sorted(scan_folder(files), key=lambda f: (f.path, f.line, f.kind)):
+        if f.kind == "network" and says_none:
+            why = "network_calls in your entry says it makes none"
+        elif f.kind == "network":
+            why = "a maintainer reviews every network call"
+        elif f.kind == "files":
+            why = "a module keeps its files in Celerp's data folder (settings.data_dir)"
+        else:
+            why = "a maintainer reviews this in every module"
+        flags.append(f"{_q(f.path)} line {f.line} {KINDS[f.kind]} ({f.detail}); {why}.")
+    return flags
+
+
+# ── the whole review ─────────────────────────────────────────────────────────
+
+def review(*, base: dict, head: dict, changed: list[str], author: str, association: str,
+           gh, lint, maintainers: set[str] = frozenset()) -> Result:
+    """Check a listing pull request. base/head map file names to their text;
+    maintainers are the lowercased logins in the base CODEOWNERS."""
+    if is_maintainer(author, association, maintainers):
+        return Result("maintainer")
+    problems = _scope_problems(changed)
+    entry_id = None
+    flags: list[str] = []
+    notes: list[str] = []
+    try:
+        try:
+            head_index = json.loads(head[CATALOG])
+            base_index = json.loads(base[CATALOG])
+        except ValueError as exc:
+            raise _Stop([f"{CATALOG} is not valid JSON: {exc}"]) from None
+        invalid = validate(head_index)
+        if invalid:
+            raise _Stop([f"{CATALOG}: {p}" for p in invalid])
+        entry, old, found = _changed_entry(base_index, head_index)
+        entry_id = entry["id"]
+        problems += found
+        problems += _ownership_problems(entry, old, author)
+        problems += _celerp_name_problems({"id": entry["id"], "name": entry["name"]})
+        problems += _taken_name_problems(entry, head_index)
+        owner, name, found, flags = _repo_problems(entry, gh)
+        problems += found
+        try:
+            archive = gh.download(f"https://codeload.github.com/{owner}/{name}/zip/"
+                                  f"{entry['commit']}", MAX_ARCHIVE_BYTES)
+        except TooLarge:
+            raise _Stop([f"The repository archive at this commit is larger than "
+                         f"{ARCHIVE_CAP_TEXT}, the most Celerp installs. Remove large files "
+                         "from the repository."]) from None
+        except NotFound:
+            raise _Stop([f"The archive of commit {_q(entry['commit'])} could not be "
+                         "downloaded. Check that the commit exists and is pushed."]) from None
+        files = _module_files(archive, entry_id)
+        manifest, found = _module_problems(entry, files, lint)
+        problems += found
+        display = {"display_name in the manifest": str(manifest.get("display_name", ""))}
+        problems += _celerp_name_problems(display)
+        flags += _non_ascii_flags({"name": entry["name"], **display})
+        flags += _flags(entry, files)
+        notes = _module_check_notes(gh, owner, name, entry["commit"])
+    except _Stop as stop:
+        problems += stop.args[0]
+    except ApiError as exc:
+        problems.append(f"The check could not finish because GitHub did not answer as "
+                        f"expected ({_q(exc)}). {RUN_AGAIN}")
+    if problems:
+        return Result("fail", problems, [], entry_id, notes)
+    return Result("flag" if flags else "pass", [], flags, entry_id, notes)
+
+
+def _module_check_notes(gh, owner: str, name: str, sha: str) -> list[str]:
+    """A note naming the module repository's checks at `sha` that failed or have not
+    finished. The listing does not depend on them, so an unreadable answer adds none."""
+    try:
+        runs = gh.get(f"/repos/{owner}/{name}/commits/{sha}/check-runs?per_page=100")
+        runs = runs.get("check_runs", [])
+    except ApiError:
+        return []
+    failed = sorted({str(r.get("name")) for r in runs if r.get("status") == "completed"
+                     and r.get("conclusion") not in ("success", "neutral", "skipped")})
+    waiting = sorted({str(r.get("name")) for r in runs if r.get("status") != "completed"})
+    notes = []
+    if failed:
+        notes.append(f"Your repository's own checks failed at this commit: "
+                     f"{', '.join(_q(n) for n in failed)}. The listing does not depend on "
+                     "them, but people who install the module get this commit, so fix the "
+                     f"module and update `commit` in this pull request's {CATALOG}.")
+    if waiting:
+        notes.append(f"Your repository's own checks had not finished at this commit when "
+                     f"this check ran: {', '.join(_q(n) for n in waiting)}.")
+    return notes
+
+
+def _bullets(items: list[str]) -> str:
+    return "\n".join("- " + i.replace("@", "@\u200b").replace("\u2014", "-") for i in items)
+
+
+def comment(result: Result) -> str:
+    notes = ("\n**Note**\n\n" + _bullets(result.notes) + "\n") if result.notes else ""
+    if result.status == "fail":
+        return ("## Listing check: changes needed\n\n"
+                "This listing cannot be merged yet. Fix each item below: a fix to the module "
+                "goes in your module's repository, and then `commit` in this pull request's "
+                f"{CATALOG} is set to the new commit. A fix to the entry is a change to "
+                f"{CATALOG} in this pull request. The check runs again on every change to "
+                "this pull request.\n\n" + _bullets(result.problems) + "\n" + notes)
+    if result.status == "flag":
+        return ("## Listing check: waiting for the maintainer\n\n"
+                "Every required check passed, but a maintainer reviews the things below "
+                "before the module is listed. If your entry should declare something (for "
+                "example a network call in network_calls), update it in this pull request's "
+                f"{CATALOG}; otherwise nothing is needed from you.\n\n"
+                + _bullets(result.flags) + "\n" + notes)
+    if result.status == "maintainer":
+        return ("## Listing check: maintainer pull request\n\n"
+                "Opened by a maintainer, so it is reviewed and merged by hand.\n")
+    return ("## Listing check: passed\n\n"
+            "Every check passed. This pull request is merged automatically, and the module "
+            "appears in Celerp's catalog on its next refresh.\n" + notes)
+
+
+# ── CI entry point ───────────────────────────────────────────────────────────
+
+def _git(*args: str) -> str:
+    return subprocess.run(["git", *args], cwd=ROOT, check=True, capture_output=True,
+                          text=True).stdout
+
+
+def _is_ancestor(commit: str, of: str) -> bool:
+    return subprocess.run(["git", "merge-base", "--is-ancestor", commit, of], cwd=ROOT,
+                          capture_output=True).returncode == 0
+
+
+def template_lint(gh):
+    """The module template's `lint(folder)`, at its pinned commit."""
+    url = (f"https://raw.githubusercontent.com/{TEMPLATE_REPO}/{TEMPLATE_COMMIT}/lint.py")
+    source = gh.download(url, MB)
+    if hashlib.sha256(source).hexdigest() != TEMPLATE_LINT_SHA256:
+        raise ApiError("the template lint file did not match its pinned hash")
+    path = pathlib.Path(tempfile.mkdtemp()) / "template_lint.py"
+    path.write_bytes(source)
+    spec = importlib.util.spec_from_file_location("template_lint", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.lint
+
+
+def pull_request_data(number: int, head_sha: str) -> tuple[str, list[str], dict, dict, set]:
+    """The pull request as GitHub would merge it, read with git and never checked out.
+
+    The workflow checks out the default branch, so the scripts that run are this
+    repository's own. The pull request's merge commit is fetched as objects only;
+    its files are read with `git show`. Returns the base commit, the changed
+    files, the listing files at the base and after the merge, and the base's code
+    owners."""
+    merge = f"refs/listing/{int(number)}"
+    default = "refs/listing/default"
+    branch = _git("symbolic-ref", "--quiet", "HEAD").strip()
+    _git("fetch", "--no-tags", "--quiet", "origin", f"+refs/pull/{int(number)}/merge:{merge}",
+         f"+{branch}:{default}")
+    parents = _git("rev-list", "--parents", "-n", "1", merge).split()[1:]
+    if len(parents) != 2 or parents[1] != head_sha:
+        raise _Stop(["GitHub has not prepared a merge of this pull request's latest commit "
+                     "(it may conflict with the catalog). Use **Update branch** or **Resolve "
+                     "conflicts** on the pull request page; the check then runs again."])
+    base_sha = parents[0]
+    if not _is_ancestor(base_sha, "HEAD"):
+        if _is_ancestor(base_sha, default):
+            raise _Stop([f"The catalog changed while this check was starting. {RUN_AGAIN}"])
+        raise _Stop(["This pull request does not target the catalog's default branch."])
+    changed = [f for f in _git("diff", "-z", "--name-only", "--no-renames", base_sha,
+                               merge).split("\0") if f]
+    base = {f: _git("show", f"{base_sha}:{f}") for f in LISTING_FILES}
+    head = {f: _git("show", f"{merge}:{f}") for f in LISTING_FILES}
+    owners = code_owners(_git("show", f"{base_sha}:{CODEOWNERS}"))
+    return base_sha, changed, base, head, owners
+
+
+def main() -> int:
+    if len(sys.argv) != 2:
+        print("usage: check_submission.py <result.json>")
+        return 2
+    event = json.loads(pathlib.Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
+    pr = event["pull_request"]
+    base_sha = ""
+    try:
+        base_sha, changed, base, head, owners = pull_request_data(pr["number"],
+                                                                   pr["head"]["sha"])
+        gh = GitHub()
+        result = review(base=base, head=head, changed=changed, author=pr["user"]["login"],
+                        association=pr.get("author_association", ""), gh=gh,
+                        lint=template_lint(gh), maintainers=owners)
+    except _Stop as exc:
+        result = Result("fail", exc.args[0])
+    except Exception as exc:  # fail closed: any error is a failed check
+        result = Result("fail", [f"The check could not finish ({_q(type(exc).__name__)}). "
+                                 f"{RUN_AGAIN}"])
+    text = comment(result)
+    pathlib.Path(sys.argv[1]).write_text(json.dumps({
+        "pr": pr["number"], "head_sha": pr["head"]["sha"], "base_sha": base_sha,
+        "status": result.status, "comment": text}))
+    print(text)
+    return 1 if result.status == "fail" else 0
+
+if __name__ == "__main__":
+    sys.exit(main())

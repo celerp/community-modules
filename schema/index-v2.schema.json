@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://raw.githubusercontent.com/celerp/community-modules/main/schema/index.schema.json",
-  "title": "Celerp module catalog",
+  "$id": "https://raw.githubusercontent.com/celerp/community-modules/main/schema/index-v2.schema.json",
+  "title": "Celerp module catalog, schema version 2",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "modules"],
   "properties": {
-    "schema_version": { "const": 1 },
+    "schema_version": { "const": 2 },
     "modules": {
       "type": "array",
       "items": { "$ref": "#/$defs/module" }
@@ -30,18 +30,27 @@
         "tier": { "enum": ["community", "verified", "official"] },
         "repo": {
           "type": "string",
-          "pattern": "^https://",
-          "description": "Public repository with readable source. Required for community and verified tiers."
+          "pattern": "^https://github\\.com/([A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?)/((?!\\.\\.?$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100})$",
+          "description": "Public GitHub repository with readable source, exactly https://github.com/<owner>/<repository>: no .git, no further path, query, fragment, user or port. Required for community and verified tiers."
+        },
+        "commit": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$",
+          "description": "The full 40-character commit of repo that this listing is for: the listing check runs on it and the Source link points to it. Required with repo; an update is a new commit."
         },
         "homepage": { "type": "string", "pattern": "^https://" },
         "author": { "type": "string", "minLength": 1, "maxLength": 80 },
         "license": { "type": "string", "minLength": 1, "maxLength": 60 },
-        "version": { "type": "string", "maxLength": 30 },
+        "version": {
+          "type": "string",
+          "maxLength": 30,
+          "description": "The release Celerp distributes. Official and verified tiers only; a community module's version is the one in its own manifest."
+        },
         "min_celerp_version": { "type": "string", "maxLength": 30 },
         "data_access": {
           "type": "string",
           "maxLength": 500,
-          "description": "What data the module touches. Author self-declaration for community tier; cross-checked against the manifest for verified tier."
+          "description": "What data the module touches. Required for community and verified tiers: an author self-declaration for community, cross-checked against the manifest for verified."
         },
         "network_calls": {
           "type": "string",
@@ -58,15 +67,10 @@
           "pattern": "^https://",
           "description": "Where to share experiences: the module's Discussion in this repo."
         },
-        "verified_commit": {
-          "type": "string",
-          "pattern": "^[0-9a-f]{40}$",
-          "description": "The exact commit reviewed for the verified tier."
-        },
         "sha256": {
           "type": "string",
           "pattern": "^[0-9a-f]{64}$",
-          "description": "sha256 of the vault snapshot built from verified_commit."
+          "description": "sha256 of the vault snapshot built from commit. Verified tier only."
         },
         "price_monthly": { "type": ["number", "null"], "minimum": 0 },
         "price_once": { "type": ["number", "null"], "minimum": 0 }

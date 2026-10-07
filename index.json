@@ -1,17 +1,4 @@
 {
   "schema_version": 1,
-  "modules": [
-    {
-      "id": "equipment-maintenance",
-      "name": "Equipment Maintenance",
-      "description": "Track company equipment and what's due for service.",
-      "tier": "community",
-      "version": "0.1.0",
-      "repo": "https://github.com/celerp/celerp-module-template",
-      "author": "Celerp",
-      "license": "MIT",
-      "data_access": "Equipment records it creates in your Celerp database.",
-      "network_calls": "None."
-    }
-  ]
+  "modules": []
 }

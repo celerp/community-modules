@@ -1,0 +1,44 @@
+name: Listing check
+
+# Checks a listing pull request against its module's repository. It runs on
+# pull_request_target, so the workflow and scripts are always the default
+# branch's: the checkout is the default branch, and check_submission.py reads
+# the pull request's index-v2.json and changed files with git as data.
+# Nothing from the pull request is checked out, installed or run, and the
+# module's archive is only read. Its result.json is what the "Merge listing"
+# workflow reads to decide whether to merge.
+on:
+  pull_request_target:
+
+permissions:
+  contents: read
+
+# One check per pull request at a time; a newer push replaces the running one.
+# The merge workflow handles the latest completed check of every pull request.
+concurrency:
+  group: listing-check-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  submission:
+    if: github.event.pull_request.base.ref == github.event.repository.default_branch
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - run: pip install --quiet --require-hashes -r scripts/requirements.txt
+      - run: python3 scripts/check_submission.py "$RUNNER_TEMP/result.json"
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: submission-result
+          path: ${{ runner.temp }}/result.json
+          retention-days: 7
