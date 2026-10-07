@@ -1,7 +1,7 @@
 <!-- Adding or updating your module in the directory? Change one entry in
-     index.json, then run `python3 scripts/gen_readme.py` to regenerate the
-     README table. See "List your module" in the README for what the automatic
-     check requires. -->
+     index.json and nothing else; the README table is rebuilt after the merge.
+     See "List your module" in the README for what the automatic check
+     requires. -->
 
 **Module name:**
 **Repository (public URL):**
@@ -18,4 +18,4 @@ Checklist:
 - [ ] The name does **not** start with `celerp-`
 - [ ] `python lint.py <module-folder>` from the template passes
 - [ ] I changed one `index.json` entry with `"tier": "community"`, declaring `data_access` and `network_calls`
-- [ ] `python3 scripts/validate_index.py` passes and I ran `python3 scripts/gen_readme.py`
+- [ ] This pull request changes `index.json` only

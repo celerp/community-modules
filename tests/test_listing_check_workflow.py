@@ -119,7 +119,50 @@ class PinnedDependencies(unittest.TestCase):
                 self.assertNotRegex(entry, r"[<>~!]=|>|<")
 
 
+class ReadmeRebuild(unittest.TestCase):
+    """README.md's table is rebuilt on the default branch, so a listing changes index.json only."""
+
+    def setUp(self):
+        self.text = (WORKFLOWS / "readme.yml").read_text(encoding="utf-8")
+        self.triggers = self.text.split("\non:", 1)[1].split("\npermissions:", 1)[0]
+
+    def test_runs_on_push_to_main_only(self):
+        self.assertEqual(self.triggers.split(), ["push:", "branches:", "[main]"])
+
+    def test_writes_contents_only(self):
+        block = self.text.split("\npermissions:", 1)[1].split("\n\n", 1)[0]
+        self.assertEqual(block.split(), ["contents:", "write"])
+        self.assertNotIn("secrets.", self.text)
+
+    def test_one_rebuild_at_a_time(self):
+        block = self.text.split("\nconcurrency:", 1)[1].split("\n\n", 1)[0]
+        self.assertIn("cancel-in-progress: false", block)
+
+    def test_rebuilds_from_the_current_default_branch(self):
+        checkouts = [s for s in steps(self.text) if "actions/checkout@" in s]
+        self.assertEqual(len(checkouts), 1)
+        self.assertIn(f"ref: {DEFAULT_BRANCH}", checkouts[0])
+
+    def test_only_pinned_actions(self):
+        for use in re.findall(r"uses:\s*(\S+)", self.text):
+            self.assertRegex(use, r"^actions/(checkout|setup-python)@[0-9a-f]{40}$")
+
+    def test_commits_the_generated_readme_only_when_it_changed(self):
+        lines = [line.strip() for line in run_lines(self.text) if line.strip() not in ("|", "")]
+        self.assertEqual(lines[0], "python3 scripts/gen_readme.py")
+        self.assertIn("git diff --quiet -- README.md && exit 0", lines)
+        commits = [line for line in lines if line.startswith("git commit")]
+        self.assertEqual(len(commits), 1)
+        self.assertTrue(commits[0].endswith("-- README.md"), commits[0])
+        self.assertEqual(lines[-1], "git push")
+        for line in lines:
+            self.assertNotIn("${{", line)
+
+
 class CatalogValidation(unittest.TestCase):
+    def test_validation_no_longer_requires_the_readme_in_the_same_change(self):
+        self.assertNotIn("gen_readme", (WORKFLOWS / "ci.yml").read_text(encoding="utf-8"))
+
     def test_validation_workflow_no_longer_runs_the_listing_check(self):
         text = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
         self.assertNotIn("check_submission", text)

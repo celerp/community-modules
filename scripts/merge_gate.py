@@ -15,7 +15,7 @@ retried.
 The check runs on pull_request_target from the default branch, so its result
 comes from this repository's own scripts; only a run of that workflow, for
 that trigger, is used. The result is used only when the pull request changes
-nothing but index.json and README.md. A pull request is squash-merged only when all of these hold:
+nothing but index.json. A pull request is squash-merged only when all of these hold:
   - the check run for its exact head commit succeeded and reported "pass"
   - the head has not moved and the default branch has not moved since the check
   - it targets the default branch, is open, and was not opened by a maintainer
@@ -48,14 +48,14 @@ STATUSES = ("pass", "fail", "flag")
 
 DID_NOT_FINISH = ("## Listing check: did not finish\n\n"
                   "The automatic check did not finish, so this pull request was not merged. "
-                  "Push a new commit (an empty one is fine) to run it again.\n")
+                  "Close and reopen this pull request to run the check again.\n")
 OTHER_FILES = ("## Listing check: changes needed\n\n"
-               "This pull request changes files other than index.json and README.md, so it "
+               "This pull request changes files other than index.json, so it "
                "cannot be merged automatically. Take the other changes out of this pull "
-               "request and push again.\n")
+               "request; README.md is rebuilt from index.json after the merge.\n")
 BRANCH_MOVED = ("## Listing check: run again\n\n"
-                "The catalog changed after this check ran, so it was not merged. Push a new "
-                "commit (an empty one is fine) to check it against the current catalog.\n")
+                "The catalog changed after this check ran, so it was not merged. Close and "
+                "reopen this pull request to check it against the current catalog.\n")
 NOT_MERGED = ("## Listing check: not merged\n\n"
               "The check passed but the merge did not go through. A maintainer will look at it.\n")
 

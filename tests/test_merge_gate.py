@@ -57,8 +57,7 @@ class Gate(unittest.TestCase):
             R: {"default_branch": "main"},
             f"{R}/pulls?state=open&per_page=100": [{"number": 12, "head": {"sha": HEAD}}],
             f"{R}/pulls/12": self.pr,
-            f"{R}/pulls/12/files?per_page=100": [{"filename": "index.json"},
-                                                 {"filename": "README.md"}],
+            f"{R}/pulls/12/files?per_page=100": [{"filename": "index.json"}],
             f"{R}/actions/runs/77/artifacts": {"artifacts": [
                 {"name": "submission-result", "archive_download_url": URL, "expired": False}]},
             f"{R}/branches/main": {"commit": {"sha": BASE}},
@@ -157,7 +156,8 @@ class Refuses(Gate):
     def test_artifact_missing(self):
         self.gh.routes[f"{R}/actions/runs/77/artifacts"] = {"artifacts": []}
         self.assertNoMerge()
-        self.assertTrue(any("did not finish" in c for c in self.comments()))
+        self.assertTrue(any("did not finish" in c and "Close and reopen" in c
+                            for c in self.comments()), self.comments())
 
     def test_artifact_malformed(self):
         buf = io.BytesIO()
@@ -191,14 +191,21 @@ class Refuses(Gate):
         self.assertNoMerge()
         self.assertTrue(any("index.json" in c for c in self.comments()))
 
+    def test_readme_changed(self):
+        # README.md is rebuilt after the merge, so a listing that changes it is not merged.
+        self.gh.routes[f"{R}/pulls/12/files?per_page=100"] = [
+            {"filename": "index.json"}, {"filename": "README.md"}]
+        self.assertNoMerge()
+        self.assertTrue(any("other than index.json" in c and "rebuilt" in c
+                            for c in self.comments()), self.comments())
+
     def test_renamed_file_counts_both_names(self):
         self.gh.routes[f"{R}/pulls/12/files?per_page=100"] = [
-            {"filename": "README.md", "previous_filename": "scripts/gen_readme.py"},
-            {"filename": "index.json"}]
+            {"filename": "index.json", "previous_filename": "scripts/gen_readme.py"}]
         self.assertNoMerge()
 
     def test_index_not_changed(self):
-        self.gh.routes[f"{R}/pulls/12/files?per_page=100"] = [{"filename": "README.md"}]
+        self.gh.routes[f"{R}/pulls/12/files?per_page=100"] = [{"filename": "LICENSE"}]
         self.assertNoMerge()
 
     def test_maintainer_pull_request(self):
@@ -222,7 +229,8 @@ class Refuses(Gate):
     def test_main_moved_since_the_check(self):
         self.gh.routes[f"{R}/branches/main"] = {"commit": {"sha": "4" * 40}}
         self.assertNoMerge()
-        self.assertTrue(any("new commit" in c for c in self.comments()))
+        self.assertTrue(any("Close and reopen" in c for c in self.comments()), self.comments())
+        self.assertFalse(any("push" in c.lower() for c in self.comments()), self.comments())
 
     def test_push_runs_are_ignored(self):
         self.event = event(event="push")

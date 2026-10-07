@@ -1,8 +1,8 @@
 name: Validate catalog
 
-# Runs this repository's tests, validates index.json (schema + policy rules) and
-# checks the README table is generated from it. Read-only. Listing pull requests
-# are checked by the "Listing check" workflow.
+# Runs this repository's tests and validates index.json (schema + policy rules).
+# Read-only. Listing pull requests are checked by the "Listing check" workflow,
+# and the README table is rebuilt after each push to main by "Rebuild README".
 on:
   pull_request:
   push:
@@ -25,4 +25,3 @@ jobs:
       - run: python3 scripts/validate_index.py --selftest
       - run: python3 -m unittest discover -s tests -t tests
       - run: python3 scripts/validate_index.py
-      - run: python3 scripts/gen_readme.py --check

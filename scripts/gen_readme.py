@@ -2,13 +2,13 @@
 """Regenerate the README module table from index.json.
 
 The table between the modules:begin / modules:end markers is generated; edit
-index.json, not the table. CI runs `gen_readme.py --check` to keep them in sync.
+index.json, not the table. .github/workflows/readme.yml runs this after every
+push to the default branch and commits the result when it changed.
 """
 from __future__ import annotations
 
 import json
 import pathlib
-import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 BEGIN, END = "<!-- modules:begin -->", "<!-- modules:end -->"
@@ -58,12 +58,6 @@ def main() -> int:
     except ValueError as exc:
         print(exc)
         return 1
-    if "--check" in sys.argv:
-        if new != text:
-            print("README table is out of date: run scripts/gen_readme.py and commit")
-            return 1
-        print("README table in sync with index.json")
-        return 0
     readme.write_text(new, encoding="utf-8")
     print("README table regenerated")
     return 0

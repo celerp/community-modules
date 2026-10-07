@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import copy
-import json
 import pathlib
 import subprocess
 import tempfile
@@ -13,22 +12,19 @@ from fakes import (SHA_A, SHA_B, SHA_C, FakeGitHub, archive_url, entry, index_te
                    module_files, module_zip, repo_routes)
 import check_submission
 from check_submission import comment, review
-from gen_readme import regenerate
 from github_api import ApiError, TooLarge
 
 OFFICIAL = {"id": "celerp-inventory", "name": "Inventory", "description": "Stock.",
             "tier": "official", "author": "Celerp", "license": "Proprietary"}
 EXISTING = entry("beta-tools", name="Beta Tools", repo="https://github.com/beta/tools",
                  commit=SHA_B, author="Beta")
-README = ("# Directory\n\nIntro.\n\n<!-- modules:begin -->\n<!-- modules:end -->\n\n"
-          "## List your module\n")
+CHECK_RUNS = f"/repos/acme/widgets/commits/{SHA_A}/check-runs?per_page=100"
 
 
 def files_for(*entries: dict) -> dict[str, str]:
-    """index.json in catalog order with its regenerated README."""
+    """index.json in catalog order. A listing pull request changes nothing else."""
     rank = {"official": 0, "verified": 1, "community": 2}
-    text = index_text(*sorted(entries, key=lambda e: (rank[e["tier"]], e["id"])))
-    return {"index.json": text, "README.md": regenerate(README, json.loads(text))}
+    return {"index.json": index_text(*sorted(entries, key=lambda e: (rank[e["tier"]], e["id"])))}
 
 
 BASE = files_for(OFFICIAL, EXISTING)
@@ -45,7 +41,7 @@ class Case(unittest.TestCase):
     def setUp(self):
         self.gh = FakeGitHub(repo_routes(), {archive_url(): module_zip(module_files())})
         self.head = files_for(OFFICIAL, NEW, EXISTING)
-        self.changed = ["index.json", "README.md"]
+        self.changed = ["index.json"]
         self.author = "acme"
         self.association = "NONE"
         self.lint = no_lint
@@ -70,16 +66,6 @@ class Passes(Case):
         result = self.run_review()
         self.assertEqual((result.status, result.problems, result.flags), ("pass", [], []))
         self.assertEqual(result.entry_id, "acme-widgets")
-
-    def test_index_only_change_without_readme_change_passes_when_table_is_unchanged(self):
-        # A description-free update leaves the generated table identical.
-        self.gh.routes.update(repo_routes(sha=SHA_C))
-        self.gh.downloads[archive_url(sha=SHA_C)] = module_zip(module_files(), sha=SHA_C)
-        base = files_for(OFFICIAL, NEW, EXISTING)
-        head = files_for(OFFICIAL, dict(NEW, commit=SHA_C), EXISTING)
-        result = review(base=base, head=head, changed=["index.json"], author="acme",
-                        association="NONE", gh=self.gh, lint=no_lint)
-        self.assertEqual(result.status, "pass", result)
 
     def test_update_by_same_owner_with_new_commit_passes(self):
         self.gh.routes.update(repo_routes(sha=SHA_C))
@@ -112,25 +98,24 @@ class Maintainer(Case):
 
 class Scope(Case):
     def test_other_file_changed(self):
-        self.changed = ["index.json", "README.md", "scripts/validate_index.py"]
+        self.changed = ["index.json", "scripts/validate_index.py"]
         self.assertFails("scripts/validate_index.py")
 
     def test_index_not_changed(self):
         self.changed = ["README.md"]
         self.assertFails("index.json")
 
-    def test_readme_edited_by_hand(self):
-        self.head["README.md"] = self.head["README.md"].replace("Intro.", "Intro! Buy now.")
-        self.assertFails("README.md")
-
-    def test_readme_not_regenerated(self):
-        self.head = dict(self.head, **{"README.md": BASE["README.md"]})
-        self.assertFails("gen_readme.py")
+    def test_readme_change_is_out_of_scope(self):
+        # README.md is rebuilt from index.json after the merge, so a listing leaves it alone.
+        self.changed = ["index.json", "README.md"]
+        result = self.assertFails("README.md")
+        self.assertTrue(any("after" in p and "merge" in p for p in result.problems),
+                        result.problems)
+        self.assertFalse(any("gen_readme" in p for p in result.problems), result.problems)
 
     def test_invalid_index(self):
         self.head = {"index.json": index_text(
-            OFFICIAL, {k: v for k, v in NEW.items() if k != "commit"}, EXISTING),
-            "README.md": BASE["README.md"]}
+            OFFICIAL, {k: v for k, v in NEW.items() if k != "commit"}, EXISTING)}
         self.assertFails("commit")
 
     def test_two_entries_added(self):
@@ -274,7 +259,50 @@ class RepoChecks(Case):
 
     def test_api_error_fails_closed(self):
         self.gh.routes["/repos/acme/widgets"] = ApiError("503")
-        self.assertFails("could not finish")
+        result = self.assertFails("could not finish")
+        self.assertTrue(any("Close and reopen" in p for p in result.problems), result.problems)
+        self.assertFalse(any("push" in p.lower() for p in result.problems), result.problems)
+
+
+class ModuleChecks(Case):
+    """The module repository's own checks at the pinned commit are noted, never required."""
+
+    def runs(self, *runs: tuple[str, str, str | None]):
+        self.gh.routes[CHECK_RUNS] = {"check_runs": [
+            {"name": n, "status": st, "conclusion": c} for n, st, c in runs]}
+
+    def test_failed_check_is_noted_and_does_not_block(self):
+        self.runs(("Structure", "completed", "success"), ("Module tests", "completed", "failure"))
+        result = self.run_review()
+        self.assertEqual(result.status, "pass", result)
+        self.assertEqual(len(result.notes), 1, result.notes)
+        self.assertIn("Module tests", result.notes[0])
+        self.assertNotIn("Structure", result.notes[0])
+        self.assertIn("Module tests", comment(result))
+
+    def test_unfinished_check_is_noted(self):
+        self.runs(("Module tests", "in_progress", None))
+        result = self.run_review()
+        self.assertEqual(result.status, "pass", result)
+        self.assertIn("not finished", " ".join(result.notes))
+
+    def test_note_is_kept_on_a_flagged_listing(self):
+        self.runs(("Module tests", "completed", "failure"))
+        self.gh.downloads[archive_url()] = module_zip(module_files(extra={
+            "acme-widgets/acme_widgets/sync.py": "import socket\n"}))
+        result = self.run_review()
+        self.assertEqual(result.status, "flag", result)
+        self.assertIn("Module tests", comment(result))
+
+    def test_passing_checks_add_no_note(self):
+        self.runs(("Module tests", "completed", "success"), ("Lint", "completed", "skipped"))
+        result = self.run_review()
+        self.assertEqual((result.status, result.notes), ("pass", []))
+
+    def test_unreadable_checks_add_no_note(self):
+        self.gh.routes[CHECK_RUNS] = ApiError("503")
+        result = self.run_review()
+        self.assertEqual((result.status, result.notes), ("pass", []))
 
 
 class ArchiveChecks(Case):
@@ -366,8 +394,14 @@ class Comments(Case):
         self.author = "mallory"
         text = comment(self.run_review())
         self.assertIn("changes needed", text.lower())
-        self.assertIn("push", text.lower())
+        self.assertIn("`commit` in this pull request's index.json", text)
+        self.assertNotIn("push", text.lower())
         self.assertNotIn("\u2014", text)
+
+    def test_flag_comment_never_asks_for_a_push(self):
+        self.gh.downloads[archive_url()] = module_zip(module_files(extra={
+            "acme-widgets/acme_widgets/sync.py": "import socket\n"}))
+        self.assertNotIn("push", comment(self.run_review()).lower())
 
     def test_flag_comment_lists_findings(self):
         self.gh.downloads[archive_url()] = module_zip(module_files(extra={
@@ -428,7 +462,6 @@ class PullRequestReadAsData(unittest.TestCase):
         (up / ".github").mkdir()
         (up / ".github/CODEOWNERS").write_text("* @keeper\n")
         (up / "index.json").write_text("base\n")
-        (up / "README.md").write_text("readme\n")
         git(up, "add", "-A")
         git(up, "commit", "-qm", "base")
         self.base = git(up, "rev-parse", "HEAD")
@@ -497,7 +530,7 @@ class PullRequestReadAsData(unittest.TestCase):
         self.assertEqual(sorted(changed), ["README.md index.json", "index.json"])
         self.assertTrue(check_submission._scope_problems(changed))
 
-    def test_catalog_that_moved_after_the_checkout_asks_for_a_new_push(self):
+    def test_catalog_that_moved_after_the_checkout_asks_to_run_again(self):
         (self.up / "later.txt").write_text("x\n")
         git(self.up, "add", "-A")
         git(self.up, "commit", "-qm", "main moves after the checkout")
@@ -506,6 +539,7 @@ class PullRequestReadAsData(unittest.TestCase):
             check_submission.pull_request_data(10, head)
         text = " ".join(stop.exception.args[0])
         self.assertIn("catalog changed", text)
+        self.assertIn("Close and reopen", text)
         self.assertNotIn("default branch", text)
 
 

@@ -1,0 +1,36 @@
+name: Rebuild README
+
+# README.md's module table is generated from index.json by scripts/gen_readme.py.
+# Listing pull requests change index.json only, so after every push to main this
+# rebuilds the table and commits it when it changed. A push made with the
+# workflow's own token starts no other workflow, so this never runs itself again.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+# Rebuilds run one after another, each from the newest main, so none is lost.
+concurrency:
+  group: rebuild-readme
+  cancel-in-progress: false
+
+jobs:
+  readme:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - run: python3 scripts/gen_readme.py
+      # Commit the table only if it changed.
+      - run: |
+          git diff --quiet -- README.md && exit 0
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit --quiet -m "Rebuild the README module table" -- README.md
+          git push
