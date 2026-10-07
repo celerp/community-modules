@@ -53,7 +53,7 @@ exactly as described above.
 <!-- modules:begin -->
 | Module | Tier | What it does | Source | Author | License |
 |---|---|---|---|---|---|
-| Equipment Maintenance | Community | Track company equipment and what\'s due for service\. | [celerp/celerp-module-template @ f863c41](https://github.com/celerp/celerp-module-template/tree/f863c419441a527e291503d50c53cbd126d13454) | Celerp | MIT |
+| Equipment Maintenance | Community | Track company equipment and what\'s due for service\. | [celerp/celerp-module-template @ b69e0fa](https://github.com/celerp/celerp-module-template/tree/b69e0fa8289731fda74d134f61e7260607a717cd) | Celerp | MIT |
 <!-- modules:end -->
 
 ## List your module

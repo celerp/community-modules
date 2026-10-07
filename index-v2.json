@@ -7,7 +7,7 @@
       "description": "Track company equipment and what's due for service.",
       "tier": "community",
       "repo": "https://github.com/celerp/celerp-module-template",
-      "commit": "f863c419441a527e291503d50c53cbd126d13454",
+      "commit": "b69e0fa8289731fda74d134f61e7260607a717cd",
       "author": "Celerp",
       "license": "MIT",
       "data_access": "Equipment records it creates in your Celerp database.",

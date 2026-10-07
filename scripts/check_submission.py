@@ -57,8 +57,8 @@ UNPACKED_CAP_TEXT = "200 MB"
 RESERVED_FILES = (".celerp-premium",)
 # The module template's lint rules, at a fixed commit, with the file's sha256.
 TEMPLATE_REPO = "celerp/celerp-module-template"
-TEMPLATE_COMMIT = "23fed95375d6299e88ee6d3af7dc68514b1d106b"
-TEMPLATE_LINT_SHA256 = "c4626c44ff806ac913df46f7774fda2860b7e6e0bfc4936453835379e1b37084"
+TEMPLATE_COMMIT = "b69e0fa8289731fda74d134f61e7260607a717cd"
+TEMPLATE_LINT_SHA256 = "4f5ee4d9167f05327edf32035da225d21e5466a105d08b0e883d85cd21905e3d"
 RUN_AGAIN = "Close and reopen this pull request to run the check again."
 NO_NETWORK = re.compile(r"^\s*(none|no network|n/?a)\b", re.I)
 LOOKALIKE = str.maketrans("013457", "oleast")

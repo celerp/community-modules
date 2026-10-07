@@ -290,22 +290,18 @@ TEMPLATE_COMMIT = next(m["commit"] for m in json.loads(  # the catalog's templat
     if m["id"] == "acme-maintenance")
 
 
-class TemplateGoesToReview(unittest.TestCase):
+class TemplateHasNoFindings(unittest.TestCase):
     @unittest.skipUnless(TEMPLATE, "set TEMPLATE to a celerp-module-template checkout")
-    def test_template_findings_are_its_raw_api_client(self):
-        # This template commit reaches Celerp's API with httpx directly, so its UI
-        # routes go to review; nothing else in it is a finding.
+    def test_template_has_no_findings(self):
+        # This template commit reaches Celerp's API only through celerp.modules.api,
+        # so nothing in it is a finding.
         def git(*args):
             return subprocess.run(["git", "-C", TEMPLATE, *args], check=True,
                                   capture_output=True).stdout
         folder = "acme-maintenance/"
         names = git("ls-tree", "-r", "--name-only", TEMPLATE_COMMIT, folder).decode().split()
         files = {n[len(folder):]: git("show", f"{TEMPLATE_COMMIT}:{n}") for n in names}
-        found = scan_folder(files)
-        self.assertIn("network", {f.kind for f in found})
-        self.assertEqual({(f.path, f.kind) for f in found} - {
-            ("acme_maintenance/ui_routes.py", "network"),
-            ("acme_maintenance/ui_routes.py", "dynamic_code")}, set())
+        self.assertEqual({(f.path, f.kind) for f in scan_folder(files)}, set())
 
 
 H = "import httpx\nfrom ui.config import API_BASE\n"
