@@ -119,30 +119,8 @@ text and never runs anything from either. A listing pull request must:
   `PLUGIN_MANIFEST`) and use `"tier": "community"`. The `verified` and
   `official` tiers are set by the maintainer of this directory.
 
-The check also scans the module's code, including the browser code in its
-scripts, pages and style sheets and in strings its Python builds them from, for
-network calls, starting other programs, running code built or loaded at runtime,
-reading environment variables, credentials or Celerp's secret settings, and file
-access outside Celerp's data folder (`settings.data_dir`). It also checks that
-the routes, slot handlers, migrations and locale files your manifest names are
-your module's own package and files. Calls to Celerp's module API
-(`celerp.modules.api`, such as `api_request`) are not findings. Anything the
-scan finds is **flagged**: the pull request gets the `needs-review` label and
-waits for the maintainer. A network call is flagged whatever `network_calls`
-says; that field is your disclosure, shown on your listing, and when it says
-"None" while the scan sees networking, the comment points out the mismatch. Code
-the scan cannot follow, such as a module like `os` stored in a variable or an
-attribute name built while the code runs, is flagged too, and so is code that
-changes names in modules Python, Celerp or its libraries provide.
-
-The scan is a review aid, not a security boundary. It reads the code as written,
-without running it, and asks one question: does the module obviously make network
-calls, run code built at runtime, or contain something the scan cannot
-confidently classify? If so, a human looks at it. A web address counts when it
-names another host, with a scheme (`https://host/...`) or without one
-(`//host.example/...`); paths inside Celerp (`/api/...`) do not. Docstrings are
-not scanned, and code that reads one back through `__doc__` is flagged. A passed
-check is not proof that a module does only what it declares.
+Some modules, for example one that makes its own network calls, are reviewed
+by a person at Celerp before they are listed.
 
 ### What happens next
 
